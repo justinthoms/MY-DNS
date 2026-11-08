@@ -1,0 +1,303 @@
+// Package nc wires ISP NetControl together: configuration, database, the
+// console API, the DNS server, the firewall and license enforcement.
+package nc
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"os"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/recover"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/justinthoms/my-dns/isp-netcontrol/internal/dnsserver"
+	"github.com/justinthoms/my-dns/isp-netcontrol/internal/firewall"
+	"github.com/justinthoms/my-dns/isp-netcontrol/internal/license"
+	"github.com/justinthoms/my-dns/shared/authkit"
+)
+
+// Version is the product version reported to the License Manager.
+const Version = "1.0.0"
+
+// Config is read from the environment (see deploy/.env.example).
+type Config struct {
+	DatabaseURL       string
+	MasterKey         string
+	HTTPAddr          string
+	DNSListen         []string
+	StateDir          string
+	MachineIDPath     string
+	ProductUUIDPath   string
+	FirewallEnabled   bool
+	NFTPath           string
+	LMURL             string
+	LMCAFile          string
+	SyncInterval      time.Duration
+	CookieSecure      bool
+	RequireTOTP       bool
+	BootstrapEmail    string
+	BootstrapPassword string
+	TrustedProxies    []string
+	QueryLogDays      int
+}
+
+func env(k, def string) string {
+	if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+		return v
+	}
+	return def
+}
+
+// ConfigFromEnv loads and validates configuration.
+func ConfigFromEnv() (Config, error) {
+	c := Config{
+		DatabaseURL:       env("NC_DATABASE_URL", ""),
+		MasterKey:         env("NC_MASTER_KEY", ""),
+		HTTPAddr:          env("NC_HTTP_ADDR", "127.0.0.1:8081"),
+		DNSListen:         strings.Split(env("NC_DNS_LISTEN", ":53"), ","),
+		StateDir:          env("NC_STATE_DIR", "/var/lib/isp-netcontrol"),
+		MachineIDPath:     env("NC_MACHINE_ID_PATH", "/etc/machine-id"),
+		ProductUUIDPath:   env("NC_PRODUCT_UUID_PATH", "/sys/class/dmi/id/product_uuid"),
+		FirewallEnabled:   env("NC_FIREWALL_ENABLED", "true") != "false",
+		NFTPath:           env("NC_NFT_PATH", "nft"),
+		LMURL:             env("NC_LM_URL", ""),
+		LMCAFile:          env("NC_LM_CA_FILE", ""),
+		CookieSecure:      env("NC_COOKIE_SECURE", "true") != "false",
+		RequireTOTP:       env("NC_REQUIRE_TOTP", "true") != "false",
+		BootstrapEmail:    env("NC_BOOTSTRAP_ADMIN_EMAIL", ""),
+		BootstrapPassword: env("NC_BOOTSTRAP_ADMIN_PASSWORD", ""),
+		TrustedProxies:    strings.Split(env("NC_TRUSTED_PROXIES", "127.0.0.1,::1"), ","),
+	}
+	var err error
+	if c.SyncInterval, err = time.ParseDuration(env("NC_SYNC_INTERVAL", "6h")); err != nil || c.SyncInterval < time.Second {
+		return c, errors.New("NC_SYNC_INTERVAL must be a duration such as 6h")
+	}
+	if _, err := fmt.Sscan(env("NC_QUERY_LOG_DAYS", "7"), &c.QueryLogDays); err != nil || c.QueryLogDays < 1 {
+		return c, errors.New("NC_QUERY_LOG_DAYS must be a positive number")
+	}
+	if c.DatabaseURL == "" {
+		return c, errors.New("NC_DATABASE_URL is required")
+	}
+	if c.MasterKey == "" {
+		return c, errors.New("NC_MASTER_KEY is required")
+	}
+	return c, nil
+}
+
+// App is a running ISP NetControl instance.
+type App struct {
+	cfg  Config
+	db   *pgxpool.Pool
+	auth *authkit.Auth
+	lic  *license.Manager
+	dns  *dnsserver.Server
+	fw   *firewall.Manager
+	web  *fiber.App
+
+	applyMu  sync.Mutex
+	fwStatus fwState
+
+	enforceMu sync.Mutex
+	enforced  string // license mode + features last enforced
+}
+
+type fwState struct {
+	Applied   bool      `json:"applied"`
+	Rules     int       `json:"rules"`
+	Error     string    `json:"error,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// New connects, migrates and prepares every component (nothing listens yet).
+func New(ctx context.Context, cfg Config) (*App, error) {
+	box, err := authkit.NewSecretBox(cfg.MasterKey)
+	if err != nil {
+		return nil, fmt.Errorf("NC_MASTER_KEY: %w", err)
+	}
+	db, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("database: %w", err)
+	}
+	if err := waitForDB(ctx, db); err != nil {
+		return nil, err
+	}
+	a := &App{cfg: cfg, db: db, fw: &firewall.Manager{NFT: cfg.NFTPath, Enabled: cfg.FirewallEnabled}}
+	if err := a.migrate(ctx); err != nil {
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
+	a.auth = &authkit.Auth{DB: db, Box: box, Issuer: "ISP NetControl", CookieName: "nc_session",
+		Secure: cfg.CookieSecure, RequireTOTP: cfg.RequireTOTP}
+	if err := a.auth.EnsureBootstrapAdmin(ctx, cfg.BootstrapEmail, cfg.BootstrapPassword); err != nil {
+		return nil, err
+	}
+	hwid, err := license.HardwareID(license.HardwareSources{MachineIDPath: cfg.MachineIDPath, ProductUUIDPath: cfg.ProductUUIDPath})
+	if err != nil {
+		return nil, fmt.Errorf("hardware ID: %w", err)
+	}
+	a.lic, err = license.New(ctx, license.Options{
+		DB: db, StateDir: cfg.StateDir, Secret: cfg.MasterKey, HardwareID: hwid, LMCAFile: cfg.LMCAFile,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("license: %w", err)
+	}
+	pol, err := a.buildPolicy(ctx, a.lic.Current())
+	if err != nil {
+		return nil, err
+	}
+	a.dns = dnsserver.New(pol)
+	a.web = a.routes()
+	return a, nil
+}
+
+func waitForDB(ctx context.Context, db *pgxpool.Pool) error {
+	var err error
+	for i := 0; i < 30; i++ {
+		if err = db.Ping(ctx); err == nil {
+			return nil
+		}
+		log.Printf("waiting for database: %v", err)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+	return fmt.Errorf("database not reachable: %w", err)
+}
+
+func (a *App) migrate(ctx context.Context) error {
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	for _, sql := range []string{`SELECT pg_advisory_xact_lock(7271002)`, authkit.Schema, license.Schema, schemaSQL} {
+		if _, err := tx.Exec(ctx, sql); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+// Run serves DNS and HTTP and runs background jobs until ctx is cancelled.
+func (a *App) Run(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	a.applyEnforcement(ctx, a.lic.Current())
+
+	errc := make(chan error, 2)
+	go func() { errc <- a.dns.ListenAndServe(ctx, a.cfg.DNSListen) }()
+	go func() {
+		log.Printf("console API listening on %s", a.cfg.HTTPAddr)
+		errc <- a.web.Listen(a.cfg.HTTPAddr)
+	}()
+	go a.lic.Run(ctx, a.cfg.SyncInterval, a.syncSettings, func(license.State) {
+		if _, err := a.refreshLicense(ctx); err != nil {
+			log.Printf("license: %v", err)
+		}
+	})
+	go a.queryLogWriter(ctx)
+
+	select {
+	case <-ctx.Done():
+	case err := <-errc:
+		if err != nil {
+			_ = a.web.Shutdown()
+			a.dns.Shutdown()
+			return err
+		}
+	}
+	_ = a.web.Shutdown()
+	a.dns.Shutdown()
+	return nil
+}
+
+// Close releases the database.
+func (a *App) Close() { a.db.Close() }
+
+func (a *App) routes() *fiber.App {
+	app := fiber.New(fiber.Config{
+		AppName:                 "isp-netcontrol",
+		DisableStartupMessage:   true,
+		BodyLimit:               8 * 1024 * 1024, // block-list imports
+		ProxyHeader:             "X-Real-IP",
+		EnableTrustedProxyCheck: true,
+		TrustedProxies:          a.cfg.TrustedProxies,
+		ErrorHandler: func(c *fiber.Ctx, err error) error {
+			var fe *fiber.Error
+			if errors.As(err, &fe) {
+				return authkit.APIError(c, fe.Code, "error", fe.Message)
+			}
+			log.Printf("%s %s: %v", c.Method(), c.Path(), err)
+			return authkit.APIError(c, fiber.StatusInternalServerError, "internal", "internal error")
+		},
+	})
+	app.Use(recover.New())
+	app.Use(func(c *fiber.Ctx) error {
+		c.Set("X-Content-Type-Options", "nosniff")
+		c.Set("Cache-Control", "no-store")
+		return c.Next()
+	})
+	app.Get("/healthz", func(c *fiber.Ctx) error {
+		if err := a.db.Ping(c.UserContext()); err != nil {
+			return authkit.APIError(c, fiber.StatusServiceUnavailable, "db", "database unavailable")
+		}
+		st, err := a.refreshLicense(c.UserContext())
+		if err != nil {
+			return err
+		}
+		return c.JSON(fiber.Map{"ok": true, "license_mode": st.Mode})
+	})
+	api := app.Group("/api", a.auth.OriginGuard())
+	a.auth.Mount(api.Group("/auth"))
+	p := api.Group("", a.auth.Require())
+	p.Get("/status", a.status)
+	p.Get("/audit", a.listAudit)
+
+	p.Get("/license", a.getLicense)
+	p.Post("/license/activate", a.activateOnline)
+	p.Post("/license/upload", a.uploadLicense)
+	p.Post("/license/sync", a.syncNow)
+	p.Put("/license/settings", a.updateLicenseSettings)
+
+	p.Get("/dns/settings", a.getDNSSettings)
+	p.Put("/dns/settings", a.updateDNSSettings)
+	p.Get("/dns/stats", a.dnsStats)
+	dnsF := p.Group("/dns", a.requireFeature("dns-filtering"))
+	dnsF.Get("/blocklist", a.listDomains("dns_blocklist"))
+	dnsF.Post("/blocklist", a.addDomain("dns_blocklist"))
+	dnsF.Post("/blocklist/import", a.importBlocklist)
+	dnsF.Delete("/blocklist/:domain", a.deleteDomain("dns_blocklist"))
+	dnsF.Get("/allowlist", a.listDomains("dns_allowlist"))
+	dnsF.Post("/allowlist", a.addDomain("dns_allowlist"))
+	dnsF.Delete("/allowlist/:domain", a.deleteDomain("dns_allowlist"))
+	p.Get("/dns/querylog", a.requireFeature("query-log"), a.queryLog)
+
+	fw := p.Group("/firewall", a.requireFeature("firewall"))
+	fw.Get("/rules", a.listRules)
+	fw.Post("/rules", a.addRule)
+	fw.Put("/rules/:id", a.updateRule)
+	fw.Delete("/rules/:id", a.deleteRule)
+	fw.Post("/apply", a.applyNow)
+	fw.Get("/status", a.firewallStatus)
+	return app
+}
+
+// requireFeature refuses requests when the feature is not licensed.
+func (a *App) requireFeature(f string) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		st := a.lic.Current()
+		if !st.Has(f) {
+			return c.Status(fiber.StatusPaymentRequired).JSON(fiber.Map{
+				"error": "this feature needs a valid license: " + st.Message, "code": "license_required", "license_mode": st.Mode,
+			})
+		}
+		return c.Next()
+	}
+}

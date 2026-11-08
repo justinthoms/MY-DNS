@@ -1,0 +1,43 @@
+# ISP NetControl HTTPS console. Nginx runs on the host network; the API
+# listens on 127.0.0.1:8081 and the console on 127.0.0.1:3001.
+server {
+    listen ${NC_HTTP_PORT};
+    server_name _;
+    location / { return 301 https://$host$request_uri; }
+}
+
+server {
+    listen ${NC_HTTPS_PORT} ssl;
+    http2 on;
+    server_name _;
+
+    ssl_certificate     /etc/nginx/tls/fullchain.pem;
+    ssl_certificate_key /etc/nginx/tls/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_session_cache   shared:SSL:10m;
+    server_tokens off;
+
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header Content-Security-Policy "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+
+    # Block-list imports can be large.
+    client_max_body_size 8m;
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:8081;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 120s;
+    }
+    location = /healthz { proxy_pass http://127.0.0.1:8081; }
+    location / {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+}

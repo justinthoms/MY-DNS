@@ -1,0 +1,87 @@
+# ISP NetControl stack. Run from this directory with an .env file next to it
+# (scripts/install.sh writes one, plus docker-compose.override.yml for
+# host-specific mounts). Build context is the package root.
+name: isp-netcontrol
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: isp_netcontrol
+      POSTGRES_USER: isp_netcontrol
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:${PG_PORT:-5433}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U isp_netcontrol -d isp_netcontrol"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build:
+      context: ../..
+      dockerfile: isp-netcontrol/deploy/Dockerfile.api
+    image: mydns/isp-netcontrol-api:1.0.0
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+    # Host networking: DNS is served on the server's own addresses and the
+    # firewall table is created in the host's network namespace.
+    network_mode: host
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN, NET_BIND_SERVICE]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    environment:
+      NC_DATABASE_URL: postgres://isp_netcontrol:${POSTGRES_PASSWORD}@127.0.0.1:${PG_PORT:-5433}/isp_netcontrol?sslmode=disable
+      NC_MASTER_KEY: ${NC_MASTER_KEY:?set NC_MASTER_KEY in .env}
+      NC_HTTP_ADDR: 127.0.0.1:8081
+      NC_DNS_LISTEN: ${NC_DNS_LISTEN:-:53}
+      NC_STATE_DIR: /var/lib/isp-netcontrol
+      NC_MACHINE_ID_PATH: /host/machine-id
+      NC_PRODUCT_UUID_PATH: /host/product_uuid
+      NC_FIREWALL_ENABLED: ${NC_FIREWALL_ENABLED:-true}
+      NC_LM_URL: ${NC_LM_URL:-}
+      NC_LM_CA_FILE: ${NC_LM_CA_FILE:-}
+      NC_SYNC_INTERVAL: ${NC_SYNC_INTERVAL:-6h}
+      NC_REQUIRE_TOTP: ${NC_REQUIRE_TOTP:-true}
+      NC_COOKIE_SECURE: "true"
+      NC_TRUSTED_PROXIES: 127.0.0.1,::1
+      NC_QUERY_LOG_DAYS: ${NC_QUERY_LOG_DAYS:-7}
+      NC_BOOTSTRAP_ADMIN_EMAIL: ${NC_BOOTSTRAP_ADMIN_EMAIL:-}
+      NC_BOOTSTRAP_ADMIN_PASSWORD: ${NC_BOOTSTRAP_ADMIN_PASSWORD:-}
+    volumes:
+      - ${NC_STATE_HOST_DIR:-/var/lib/isp-netcontrol}:/var/lib/isp-netcontrol
+      - /etc/machine-id:/host/machine-id:ro
+
+  web:
+    build:
+      context: ../..
+      dockerfile: isp-netcontrol/deploy/Dockerfile.web
+    image: mydns/isp-netcontrol-web:1.0.0
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3001:3001"
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  nginx:
+    image: nginx:1.28-alpine
+    restart: unless-stopped
+    depends_on: [api, web]
+    network_mode: host
+    environment:
+      NC_HTTP_PORT: ${HTTP_PORT:-80}
+      NC_HTTPS_PORT: ${HTTPS_PORT:-443}
+    volumes:
+      - ./templates:/etc/nginx/templates:ro
+      - ${TLS_DIR:-./tls}:/etc/nginx/tls:ro
+
+volumes:
+  pgdata:

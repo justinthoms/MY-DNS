@@ -1,0 +1,19 @@
+# Build output
+/dist/
+/bin/
+*.test
+
+# Next.js
+node_modules/
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+
+# Deployment-time files (secrets, certificates, host overrides)
+.env
+**/deploy/tls/
+**/deploy/acme/
+**/deploy/state*/
+**/deploy/lm-ca.pem
+**/deploy/docker-compose.override.yml

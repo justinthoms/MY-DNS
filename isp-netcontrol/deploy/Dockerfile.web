@@ -1,0 +1,17 @@
+# Build context: the package root.
+FROM node:22-alpine AS build
+WORKDIR /app
+ENV NEXT_TELEMETRY_DISABLED=1
+COPY isp-netcontrol/web/package.json isp-netcontrol/web/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY isp-netcontrol/web ./
+RUN rm -rf node_modules/.cache .next && npm run build
+
+FROM node:22-alpine
+WORKDIR /app
+ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 HOSTNAME=0.0.0.0 PORT=3001
+COPY --from=build /app/.next/standalone ./
+COPY --from=build /app/.next/static ./.next/static
+USER node
+EXPOSE 3001
+CMD ["node", "server.js"]
