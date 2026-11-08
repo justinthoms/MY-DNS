@@ -149,6 +149,9 @@ func (a *App) buildPolicy(ctx context.Context, st license.State) (*dnsserver.Pol
 	for _, c := range s.AllowedClients {
 		p.AllowedClients = append(p.AllowedClients, netip.MustParsePrefix(c))
 	}
+	if p.Records, err = a.loadRecords(ctx); err != nil {
+		return nil, err
+	}
 	if p.Filtering {
 		rows, err := a.db.Query(ctx, `SELECT domain, category FROM dns_blocklist`)
 		if err != nil {

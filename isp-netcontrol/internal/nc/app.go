@@ -23,7 +23,7 @@ import (
 )
 
 // Version is the product version reported to the License Manager.
-const Version = "1.0.0"
+const Version = "1.1.0"
 
 // Config is read from the environment (see deploy/.env.example).
 type Config struct {
@@ -45,6 +45,10 @@ type Config struct {
 	BootstrapPassword string
 	TrustedProxies    []string
 	QueryLogDays      int
+
+	// trustedPEM replaces the built-in signing keys. It is unexported on
+	// purpose: only this package's tests can set it, never the environment.
+	trustedPEM string
 }
 
 func env(k, def string) string {
@@ -105,6 +109,8 @@ type App struct {
 
 	enforceMu sync.Mutex
 	enforced  string // license mode + features last enforced
+
+	stats statsRecorder
 }
 
 type fwState struct {
@@ -142,6 +148,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	}
 	a.lic, err = license.New(ctx, license.Options{
 		DB: db, StateDir: cfg.StateDir, Secret: cfg.MasterKey, HardwareID: hwid, LMCAFile: cfg.LMCAFile,
+		TrustedPEM: cfg.trustedPEM,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("license: %w", err)
@@ -203,6 +210,8 @@ func (a *App) Run(ctx context.Context) error {
 		}
 	})
 	go a.queryLogWriter(ctx)
+	go a.statsWriter(ctx)
+	go a.sourceRefresher(ctx)
 
 	select {
 	case <-ctx.Done():
@@ -269,15 +278,32 @@ func (a *App) routes() *fiber.App {
 	p.Get("/dns/settings", a.getDNSSettings)
 	p.Put("/dns/settings", a.updateDNSSettings)
 	p.Get("/dns/stats", a.dnsStats)
+	p.Get("/dns/timeseries", a.timeseries)
+	// Local records are core resolver functionality: available in every license state.
+	p.Get("/dns/records", a.listRecords)
+	p.Post("/dns/records", a.addRecord)
+	p.Put("/dns/records/:id", a.updateRecord)
+	p.Delete("/dns/records/:id", a.deleteRecord)
 	dnsF := p.Group("/dns", a.requireFeature("dns-filtering"))
 	dnsF.Get("/blocklist", a.listDomains("dns_blocklist"))
 	dnsF.Post("/blocklist", a.addDomain("dns_blocklist"))
-	dnsF.Post("/blocklist/import", a.importBlocklist)
+	dnsF.Get("/blocklist/export", a.exportList("dns_blocklist"))
+	dnsF.Post("/blocklist/import", a.importList("dns_blocklist"))
 	dnsF.Delete("/blocklist/:domain", a.deleteDomain("dns_blocklist"))
 	dnsF.Get("/allowlist", a.listDomains("dns_allowlist"))
 	dnsF.Post("/allowlist", a.addDomain("dns_allowlist"))
+	dnsF.Get("/allowlist/export", a.exportList("dns_allowlist"))
+	dnsF.Post("/allowlist/import", a.importList("dns_allowlist"))
 	dnsF.Delete("/allowlist/:domain", a.deleteDomain("dns_allowlist"))
+	dnsF.Get("/sources", a.listSources)
+	dnsF.Post("/sources", a.addSource)
+	dnsF.Put("/sources/:id", a.updateSource)
+	dnsF.Delete("/sources/:id", a.deleteSource)
+	dnsF.Post("/sources/:id/refresh", a.refreshSourceNow)
+	dnsF.Get("/check", a.checkDomain)
 	p.Get("/dns/querylog", a.requireFeature("query-log"), a.queryLog)
+	p.Get("/dns/querylog/export", a.requireFeature("query-log"), a.exportQueryLog)
+	p.Get("/dns/top", a.requireFeature("query-log"), a.top)
 
 	fw := p.Group("/firewall", a.requireFeature("firewall"))
 	fw.Get("/rules", a.listRules)

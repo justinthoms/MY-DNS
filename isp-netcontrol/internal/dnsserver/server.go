@@ -28,6 +28,7 @@ type Policy struct {
 	SinkholeV6     net.IP            // answer for AAAA queries in sinkhole mode
 	Upstreams      []string          // host:port
 	AllowedClients []netip.Prefix    // who may query (prevents an open resolver)
+	Records        Records           // local DNS records; answered before filtering
 	LogQueries     bool              // query-log feature licensed
 }
 
@@ -37,7 +38,7 @@ type QueryEvent struct {
 	Client netip.Addr
 	Name   string
 	Type   string
-	Action string // forwarded, cached, blocked, refused, failed
+	Action string // forwarded, cached, blocked, refused, failed, local
 }
 
 // Stats are cumulative counters since start.
@@ -48,6 +49,19 @@ type Stats struct {
 	Blocked   uint64 `json:"blocked"`
 	Refused   uint64 `json:"refused"`
 	Failed    uint64 `json:"failed"`
+	Local     uint64 `json:"local"`
+}
+
+// Sub returns the counters accumulated since an earlier snapshot.
+func (a Stats) Sub(b Stats) Stats {
+	return Stats{Total: a.Total - b.Total, Forwarded: a.Forwarded - b.Forwarded, Cached: a.Cached - b.Cached,
+		Blocked: a.Blocked - b.Blocked, Refused: a.Refused - b.Refused, Failed: a.Failed - b.Failed, Local: a.Local - b.Local}
+}
+
+// Add sums two sets of counters.
+func (a Stats) Add(b Stats) Stats {
+	return Stats{Total: a.Total + b.Total, Forwarded: a.Forwarded + b.Forwarded, Cached: a.Cached + b.Cached,
+		Blocked: a.Blocked + b.Blocked, Refused: a.Refused + b.Refused, Failed: a.Failed + b.Failed, Local: a.Local + b.Local}
 }
 
 // Server is a running resolver.
@@ -56,7 +70,7 @@ type Server struct {
 	cache   *cache
 	events  chan QueryEvent
 	servers []*dns.Server
-	stats   struct{ total, forwarded, cached, blocked, refused, failed atomic.Uint64 }
+	stats   struct{ total, forwarded, cached, blocked, refused, failed, local atomic.Uint64 }
 	client  *dns.Client
 	tcp     *dns.Client
 }
@@ -91,6 +105,7 @@ func (s *Server) Stats() Stats {
 	return Stats{
 		Total: s.stats.total.Load(), Forwarded: s.stats.forwarded.Load(), Cached: s.stats.cached.Load(),
 		Blocked: s.stats.blocked.Load(), Refused: s.stats.refused.Load(), Failed: s.stats.failed.Load(),
+		Local: s.stats.local.Load(),
 	}
 }
 
@@ -143,14 +158,20 @@ func (s *Server) Shutdown() {
 // "" (not listed). A listed domain also covers all of its subdomains, and an
 // allow entry wins over a block entry at any level.
 func (p *Policy) Decide(name string) (decision, category string) {
+	d, cat, _ := p.Explain(name)
+	return d, cat
+}
+
+// Explain is Decide plus the list entry that matched.
+func (p *Policy) Explain(name string) (decision, category, matched string) {
 	name = strings.TrimSuffix(strings.ToLower(name), ".")
-	blockedCat, blocked := "", false
+	blockedCat, blockedBy := "", ""
 	for n := name; n != ""; {
 		if p.Allowed[n] {
-			return "allowed", ""
+			return "allowed", "", n
 		}
-		if cat, ok := p.Blocked[n]; ok && !blocked {
-			blockedCat, blocked = cat, true
+		if cat, ok := p.Blocked[n]; ok && blockedBy == "" {
+			blockedCat, blockedBy = cat, n
 		}
 		i := strings.IndexByte(n, '.')
 		if i < 0 {
@@ -158,10 +179,10 @@ func (p *Policy) Decide(name string) (decision, category string) {
 		}
 		n = n[i+1:]
 	}
-	if blocked {
-		return "blocked", blockedCat
+	if blockedBy != "" {
+		return "blocked", blockedCat, blockedBy
 	}
-	return "", ""
+	return "", "", ""
 }
 
 func (p *Policy) clientAllowed(a netip.Addr) bool {
@@ -213,6 +234,13 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 		ev.Action = "refused"
 		s.emit(p, ev)
 		s.reply(w, req, dns.RcodeRefused)
+		return
+	}
+	if rrs := p.Records.Lookup(q.Name); rrs != nil {
+		s.stats.local.Add(1)
+		ev.Action = "local"
+		s.emit(p, ev)
+		_ = w.WriteMsg(s.answerLocal(p, req, rrs))
 		return
 	}
 	if p.Filtering {

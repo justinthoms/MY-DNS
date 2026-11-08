@@ -1,11 +1,9 @@
 package nc
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"log"
-	"net/netip"
 	"strings"
 	"time"
 
@@ -252,8 +250,11 @@ func (a *App) addDomain(table string) fiber.Handler {
 		if cat == "" {
 			cat = map[string]string{"dns_blocklist": "custom", "dns_allowlist": "allow"}[table]
 		}
-		if _, err := a.db.Exec(c.UserContext(), `INSERT INTO `+table+`(domain, category, note) VALUES ($1,$2,$3)
-			ON CONFLICT (domain) DO UPDATE SET category=$2, note=$3`, d, trunc(cat, 64), trunc(req.Note, 500)); err != nil {
+		upsert := `INSERT INTO ` + table + `(domain, category, note) VALUES ($1,$2,$3) ON CONFLICT (domain) DO UPDATE SET category=$2, note=$3`
+		if table == "dns_blocklist" {
+			upsert += `, source_id=NULL` // added by hand: no longer owned by a subscription
+		}
+		if _, err := a.db.Exec(c.UserContext(), upsert, d, trunc(cat, 64), trunc(req.Note, 500)); err != nil {
 			return err
 		}
 		if err := a.reloadDNS(c.UserContext()); err != nil {
@@ -283,89 +284,6 @@ func (a *App) deleteDomain(table string) fiber.Handler {
 		a.auth.AuditC(c, table+".removed", d, nil)
 		return c.JSON(fiber.Map{"ok": true})
 	}
-}
-
-// importBlocklist accepts plain domain lists and hosts-file format
-// ("0.0.0.0 ads.example"). Comments and invalid lines are skipped.
-func (a *App) importBlocklist(c *fiber.Ctx) error {
-	var req struct {
-		Text     string `json:"text"`
-		Category string `json:"category"`
-	}
-	if err := c.BodyParser(&req); err != nil {
-		return bad(c, "invalid body")
-	}
-	cat := strings.TrimSpace(req.Category)
-	if cat == "" {
-		cat = "imported"
-	}
-	var domains []string
-	skipped := 0
-	seen := map[string]bool{}
-	sc := bufio.NewScanner(strings.NewReader(req.Text))
-	sc.Buffer(make([]byte, 64*1024), 1024*1024)
-	for sc.Scan() {
-		line := sc.Text()
-		if i := strings.IndexByte(line, '#'); i >= 0 {
-			line = line[:i]
-		}
-		fields := strings.Fields(line)
-		if len(fields) == 0 {
-			continue
-		}
-		var cands []string
-		if _, err := netip.ParseAddr(fields[0]); err == nil && len(fields) >= 2 {
-			cands = fields[1:] // hosts-file line: "0.0.0.0 name [name...]"
-		} else if len(fields) == 1 {
-			cands = fields
-		} else {
-			skipped++ // free text, not a list entry
-			continue
-		}
-		for _, cand := range cands {
-			d, err := normaliseDomain(cand)
-			if err != nil || d == "localhost" || d == "localhost.localdomain" || d == "local" {
-				skipped++
-				continue
-			}
-			if !seen[d] {
-				seen[d] = true
-				domains = append(domains, d)
-			}
-		}
-	}
-	if len(domains) > 500000 {
-		return bad(c, "too many entries in one import (max 500000)")
-	}
-	ctx := c.UserContext()
-	tx, err := a.db.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `CREATE TEMP TABLE import_domains (domain TEXT) ON COMMIT DROP`); err != nil {
-		return err
-	}
-	rows := make([][]any, len(domains))
-	for i, d := range domains {
-		rows[i] = []any{d}
-	}
-	if _, err := tx.CopyFrom(ctx, pgx.Identifier{"import_domains"}, []string{"domain"}, pgx.CopyFromRows(rows)); err != nil {
-		return err
-	}
-	tag, err := tx.Exec(ctx, `INSERT INTO dns_blocklist(domain, category) SELECT DISTINCT domain, $1 FROM import_domains ON CONFLICT (domain) DO NOTHING`, trunc(cat, 64))
-	if err != nil {
-		return err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return err
-	}
-	if err := a.reloadDNS(ctx); err != nil {
-		return err
-	}
-	added := tag.RowsAffected()
-	a.auth.AuditC(c, "dns_blocklist.imported", cat, fiber.Map{"added": added, "skipped": skipped})
-	return c.JSON(fiber.Map{"added": added, "already_present": int64(len(domains)) - added, "skipped": skipped})
 }
 
 func (a *App) queryLog(c *fiber.Ctx) error {
