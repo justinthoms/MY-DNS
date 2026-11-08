@@ -15,7 +15,7 @@ if grep -q "BEGIN MYDNS LICENSE SIGNING KEY" isp-netcontrol/internal/license/tru
   exit 1
 fi
 mkdir -p dist
-COMMON=(go.mod go.sum README.md shared docs)
+COMMON=(go.mod go.sum README.md CHANGELOG.md shared docs)
 build() {
   local name="$1"; shift
   local out="dist/$name-$VERSION.zip" tmp
@@ -27,5 +27,5 @@ build() {
   echo "$out ($(du -h "$out" | cut -f1))"
 }
 build isp-netcontrol isp-netcontrol
-(cd dist && sha256sum ./*-"$VERSION".zip > SHA256SUMS)
+(cd dist && sha256sum "isp-netcontrol-$VERSION.zip" > SHA256SUMS)
 echo "dist/SHA256SUMS"

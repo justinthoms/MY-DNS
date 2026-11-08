@@ -73,6 +73,7 @@ Every sign-in and administrative change.
 - [How licensing works and its limits](docs/LICENSING.md)
 - [Operations: backups, upgrades, troubleshooting](docs/OPERATIONS.md)
 - [Architecture and security design](docs/ARCHITECTURE.md)
+- [Changelog](CHANGELOG.md)
 
 ## Development
 
