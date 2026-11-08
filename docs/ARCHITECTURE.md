@@ -44,6 +44,17 @@
 - **Firewall**: one table, replaced atomically per change; never touches
   other tables; removed when the feature is not licensed or on uninstall.
 
+## Chart colours
+
+The dashboard graph uses four categorical series colours in a fixed order:
+total, blocked, refused, failed. The order was checked with a colour-vision
+validator against the console's panel colours. Light mode (`#2a78d6`,
+`#eb6834`, `#1baf7a`, `#eda100` on white): worst adjacent colour-blind ΔE 9.1,
+normal-vision ΔE 22.9. Dark mode (`#3987e5`, `#d95926`, `#199e70`, `#c98500`
+on `#19212b`): ΔE 8.4 and 19.8. In light mode two colours are below 3:1
+contrast, so the chart always has a legend, a tooltip with every value and a
+table view, and never relies on colour alone.
+
 ## Stack
 
 Go 1.26 with Fiber v2, pgx v5, miekg/dns and pquerna/otp; Next.js 15 / React 19

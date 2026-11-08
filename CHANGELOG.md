@@ -1,5 +1,33 @@
 # Changelog
 
+## v1.1.0 (2026-11-08)
+
+### New
+- **Dashboard graph**: queries over time (total, blocked, refused, failed)
+  for 1 hour, 24 hours, 7 days or 30 days, with a hover readout, a table
+  view and summary figures. Counters are stored per minute for 30 days.
+- **Top lists** on the dashboard: most blocked domains and busiest clients.
+- **DNS records**: local A, AAAA, CNAME, TXT, MX and PTR records, with
+  wildcards (`*.name`) and PTR from an IP address. Answered before
+  filtering, available in every license state.
+- **Block and allow list export** as text, hosts file or CSV.
+- **Import into either list**, merge or replace; also understands CSV and
+  Adblock-style `||domain^` rules.
+- **Block-list subscriptions**: download public lists by URL, refreshed every
+  24 hours; failed or empty downloads keep the old list, hand-made entries
+  are never overwritten.
+- **Check a domain**: shows whether a name is blocked, allowed, answered
+  locally or forwarded, and which entry decides it.
+- **Query log export** to CSV.
+
+### Changed
+- New query result "local" in the query log and statistics.
+- Integration tests for the API against PostgreSQL.
+
+### Upgrading
+Run the installer of the new release with the same options. The database
+is migrated automatically; existing lists, rules, licenses and settings are kept.
+
 ## v1.0.0 (2026-11-08)
 
 First release of **ISP NetControl**.

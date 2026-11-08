@@ -3,9 +3,14 @@
 **ISP NetControl** is a filtering DNS resolver and firewall manager for
 Internet service providers:
 
-- DNS for subscribers with block lists, allow lists, list import, sinkhole
-  or NXDOMAIN answers, caching and a query log. Only configured client
-  networks are answered, so it is never an open resolver.
+- DNS for subscribers with block lists and allow lists (export and import
+  as text, hosts file or CSV), block-list subscriptions from a URL refreshed
+  daily, sinkhole or NXDOMAIN answers, caching and a query log. Only
+  configured client networks are answered, so it is never an open resolver.
+- Local DNS records (A, AAAA, CNAME, TXT, MX, PTR, wildcards) for internal
+  hosts, overrides and reverse lookups.
+- A dashboard with a queries-over-time graph (total, blocked, refused,
+  failed) for 1 hour to 30 days, and the top blocked domains and clients.
 - Firewall management through its own nftables table (`inet isp_netcontrol`);
   the server's existing firewall rules are never changed.
 - A web console with mandatory two-factor authentication, CSRF protection,
@@ -20,22 +25,41 @@ Ubuntu 24.04.
 
 ## Screenshots
 
-The console of a running installation, with demo data (example domains and
-documentation IP ranges).
+The console of a running installation, with demo data (example domains,
+documentation IP ranges, and a synthetic traffic history for the graph).
 
 ### Dashboard
-License status, live DNS statistics and the state of DNS filtering and the firewall.
+Queries over time for the chosen period (1 hour to 30 days) with a hover
+readout for every series and a table view, summary figures, the top blocked
+domains and top clients, and the state of licensing, DNS and the firewall.
 
 ![Dashboard](docs/screenshots/03-dashboard.png)
 
 ### DNS filtering
-Block and allow lists. A blocked domain also blocks its subdomains; lists
-can be imported in plain or hosts-file format.
+"Check a domain" shows how a name is answered and which entry decides it.
+Block and allow lists can be exported (text, hosts file, CSV) and a blocked
+domain also blocks its subdomains.
 
 ![DNS filtering](docs/screenshots/04-dns-filtering.png)
 
+### Import and subscriptions
+Import into either list (merge, or replace the hand-made entries) from plain
+lists, hosts files, Adblock-style rules or CSV. Subscribe to public block
+lists by URL; they refresh every 24 hours.
+
+![Import a list](docs/screenshots/12-import.png)
+
+![Block list subscriptions](docs/screenshots/11-subscriptions.png)
+
+### DNS records
+Local A, AAAA, CNAME, TXT, MX and PTR records, answered before filtering.
+`*.name` matches every name below it; PTR records accept an IP address.
+
+![DNS records](docs/screenshots/10-dns-records.png)
+
 ### Query log
-Every query with its client, type and result (forwarded, cached, blocked, refused, failed).
+Every query with its client, type and result (forwarded, cached, local,
+blocked, refused, failed), with CSV export.
 
 ![Query log](docs/screenshots/05-query-log.png)
 
@@ -81,6 +105,12 @@ Requirements: Go 1.26 and Node.js 22.
 
 ```bash
 go test ./...
+```
+
+Integration tests run the application against PostgreSQL when a database is given:
+
+```bash
+NC_TEST_DATABASE_URL=postgres://postgres:secret@127.0.0.1:5432/postgres go test ./isp-netcontrol/internal/nc/
 ```
 
 Console in development mode (run the API with `NC_COOKIE_SECURE=false` for plain HTTP):

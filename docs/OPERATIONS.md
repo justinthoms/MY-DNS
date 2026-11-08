@@ -38,6 +38,33 @@ reinstalling the operating system, which changes the machine ID), the vendor
 releases it from the old hardware and you activate it on the new server.
 See [LICENSING.md](LICENSING.md).
 
+## Block lists: export, import and subscriptions
+
+- **Export** (DNS filtering → Export): text (one domain per line), hosts
+  file, or CSV with category, note and source. The CSV re-imports with its
+  categories, so it doubles as a backup of the lists.
+- **Import**: into the block or allow list. *Merge* adds new entries;
+  *Replace* first removes the hand-made entries of that list (subscription
+  entries stay). Plain lists, hosts files, Adblock-style `||domain^` rules
+  and CSV are understood; anything else is skipped and counted.
+- **Subscriptions** download a list from a URL every 24 hours (or on
+  **Refresh**). The server needs outbound HTTPS to the list's host. A failed
+  or empty download keeps the previous entries, and an entry you add by hand
+  is never overwritten or removed by a subscription.
+
+## DNS records
+
+**DNS records** holds local A, AAAA, CNAME, TXT, MX and PTR records. They
+are answered before filtering, also when the license has expired, and take
+effect immediately. A name may hold a CNAME or other records, not both.
+Use **DNS filtering → Check a domain** to see how a name is answered.
+
+## Statistics
+
+Query counters are stored per minute in the database and kept for 30 days,
+so the dashboard graph survives restarts. The top lists come from the query
+log (7 days by default, `NC_QUERY_LOG_DAYS`) and need the query-log feature.
+
 ## Logs and health
 
 ```bash

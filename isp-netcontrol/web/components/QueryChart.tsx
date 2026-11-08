@@ -56,8 +56,10 @@ export default function QueryChart({ points, bucketSeconds, loading }: { points:
   const yTicks = [0, 0.25, 0.5, 0.75, 1].map((f) => f * yMax);
   const xTickEvery = Math.max(1, Math.ceil(n / Math.max(2, Math.floor(innerW / 90))));
 
-  const path = (key: keyof Point) =>
-    points.map((p, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(p[key] as number).toFixed(1)}`).join("");
+  // The last bucket is still filling up: draw it separately and faded so a
+  // partial count does not read as a drop in traffic.
+  const seg = (key: keyof Point, from: number, to: number) =>
+    points.slice(from, to + 1).map((p, j) => `${j === 0 ? "M" : "L"}${x(from + j).toFixed(1)},${y(p[key] as number).toFixed(1)}`).join("");
 
   const onMove = (clientX: number) => {
     const r = wrap.current?.getBoundingClientRect();
@@ -126,7 +128,10 @@ export default function QueryChart({ points, bucketSeconds, loading }: { points:
               ) : null,
             )}
             {[...SERIES].reverse().map((s) => (
-              <path key={s.key} d={path(s.key)} fill="none" stroke={s.color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+              <g key={s.key}>
+                <path d={seg(s.key, 0, Math.max(0, n - 2))} fill="none" stroke={s.color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+                {n > 1 && <path d={seg(s.key, n - 2, n - 1)} fill="none" stroke={s.color} strokeWidth={2} strokeLinecap="round" opacity={0.35} />}
+              </g>
             ))}
             {hp && hover != null && (
               <g>
@@ -139,7 +144,7 @@ export default function QueryChart({ points, bucketSeconds, loading }: { points:
           </svg>
           {hp && (
             <div className="viz-tip" style={{ left: tipLeft, top: PAD.top }} role="status">
-              <div className="viz-tip-time">{new Date(hp.t).toISOString().slice(0, 16).replace("T", " ")} UTC</div>
+              <div className="viz-tip-time">{new Date(hp.t).toISOString().slice(0, 16).replace("T", " ")} UTC{hover === n - 1 && " (in progress)"}</div>
               {SERIES.map((s) => (
                 <div key={s.key} className="viz-tip-row">
                   <i style={{ background: s.color }} />

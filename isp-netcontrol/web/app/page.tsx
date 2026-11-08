@@ -83,7 +83,7 @@ export default function Dashboard() {
       )}
 
       {t && (
-        <div className="grid">
+        <div className="grid kpis">
           <div className="stat"><div className="label">Queries</div><div className="value">{t.total.toLocaleString()}</div><div className="sub">last {RANGES.find((r) => r[0] === range)?.[1]}</div></div>
           <div className="stat"><div className="label">Blocked</div><div className="value">{t.blocked.toLocaleString()}</div><div className="sub">{pct(t.blocked, t.total)}</div></div>
           <div className="stat"><div className="label">Refused</div><div className="value">{t.refused.toLocaleString()}</div><div className="sub">clients not allowed</div></div>

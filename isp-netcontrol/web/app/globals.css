@@ -161,3 +161,4 @@ pre.block { background: var(--bg); border: 1px solid var(--border); border-radiu
 .rank .fill { height: 6px; border-radius: 0 3px 3px 0; background: var(--bar); min-width: 2px; }
 a.button-link { display: inline-block; border: 1px solid var(--accent); color: var(--accent); border-radius: 6px; padding: 4px 10px; font-size: 13px; font-weight: 500; }
 a.button-link:hover { text-decoration: none; background: var(--bg); }
+.grid.kpis { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
