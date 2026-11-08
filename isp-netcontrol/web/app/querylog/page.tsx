@@ -27,6 +27,7 @@ export default function QueryLog() {
             </label>
             <button className="secondary">Filter</button>
             <button type="button" className="secondary" onClick={reload}>Refresh</button>
+            <a className="button-link" style={{ marginLeft: "auto" }} href={`/api/dns/querylog/export?range=7d&q=${encodeURIComponent(applied.q)}&action=${applied.action}`} download>Export CSV (7 days)</a>
           </form>
           <Alert kind="error">{error}</Alert>
           <div className="table-wrap">

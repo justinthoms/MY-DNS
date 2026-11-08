@@ -6,11 +6,13 @@ import { Alert, useAction, useLoad } from "./ui";
 
 type Entry = { domain: string; category: string; note: string; created_at: string };
 
+// reloadKey lets the page refresh both lists after an import.
+
 // DomainList manages the block list or the allow list.
-export default function DomainList({ kind }: { kind: "blocklist" | "allowlist" }) {
+export default function DomainList({ kind, reloadKey = 0 }: { kind: "blocklist" | "allowlist"; reloadKey?: number }) {
   const [q, setQ] = useState("");
   const [query, setQuery] = useState("");
-  const { data, error, reload } = useLoad<{ entries: Entry[]; total: number }>(`/dns/${kind}?q=${encodeURIComponent(query)}`);
+  const { data, error, reload } = useLoad<{ entries: Entry[]; total: number }>(`/dns/${kind}?q=${encodeURIComponent(query)}&r=${reloadKey}`);
   const act = useAction();
   const [domain, setDomain] = useState("");
   const [category, setCategory] = useState("");
@@ -23,7 +25,15 @@ export default function DomainList({ kind }: { kind: "blocklist" | "allowlist" }
   const block = kind === "blocklist";
   return (
     <div className="panel">
-      <h2>{block ? "Block list" : "Allow list"} {data && <span className="muted">({data.total.toLocaleString()})</span>}</h2>
+      <div className="row" style={{ justifyContent: "space-between", marginBottom: 8 }}>
+        <h2 style={{ margin: 0 }}>{block ? "Block list" : "Allow list"} {data && <span className="muted">({data.total.toLocaleString()})</span>}</h2>
+        <div className="actions" aria-label="Export">
+          <span className="muted" style={{ alignSelf: "center", fontSize: 13 }}>Export:</span>
+          {(["txt", "hosts", "csv"] as const).map((f) => (
+            <a key={f} className="button-link" href={`/api/dns/${kind}/export?format=${f}`} download>{f === "txt" ? "Text" : f === "hosts" ? "Hosts" : "CSV"}</a>
+          ))}
+        </div>
+      </div>
       <p className="muted">
         {block
           ? "A blocked domain also blocks all of its subdomains."

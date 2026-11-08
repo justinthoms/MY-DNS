@@ -8,6 +8,7 @@ import { ApiError, get, post, Me } from "@/lib/api";
 const NAV = [
   { href: "/", label: "Dashboard" },
   { href: "/dns", label: "DNS filtering" },
+  { href: "/records", label: "DNS records" },
   { href: "/querylog", label: "Query log" },
   { href: "/firewall", label: "Firewall" },
   { href: "/settings", label: "DNS settings" },
