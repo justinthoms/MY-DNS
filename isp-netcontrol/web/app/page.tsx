@@ -15,6 +15,8 @@ type Status = {
   firewall: { state: { applied: boolean; rules: number; error?: string }; enabled_rules: number; managed: boolean };
 };
 
+const domains = (n: number) => `${n.toLocaleString()} ${n === 1 ? "domain" : "domains"}`;
+
 export default function Dashboard() {
   const { data, error } = useLoad<Status>("/status");
   const lic = data?.license;
@@ -48,8 +50,8 @@ export default function Dashboard() {
               <h2>DNS</h2>
               <dl className="kv">
                 <dt>Filtering</dt><dd>{data.dns.filtering_active ? <span className="badge ok">active</span> : <span className="badge bad">off</span>}</dd>
-                <dt>Block list</dt><dd>{data.dns.blocklist_entries.toLocaleString()} domains</dd>
-                <dt>Allow list</dt><dd>{data.dns.allowlist_entries.toLocaleString()} domains</dd>
+                <dt>Block list</dt><dd>{domains(data.dns.blocklist_entries)}</dd>
+                <dt>Allow list</dt><dd>{domains(data.dns.allowlist_entries)}</dd>
                 <dt>Query log</dt><dd>{data.dns.query_log_active ? "on" : "off"}</dd>
                 <dt>Listening</dt><dd className="mono">{data.dns.listen.join(", ")}</dd>
               </dl>

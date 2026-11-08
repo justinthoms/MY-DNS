@@ -18,6 +18,55 @@ Internet service providers:
 Stack: Go (Fiber), Next.js, PostgreSQL 16, Docker Compose, Nginx with HTTPS,
 Ubuntu 24.04.
 
+## Screenshots
+
+The console of a running installation, with demo data (example domains and
+documentation IP ranges).
+
+### Dashboard
+License status, live DNS statistics and the state of DNS filtering and the firewall.
+
+![Dashboard](docs/screenshots/03-dashboard.png)
+
+### DNS filtering
+Block and allow lists. A blocked domain also blocks its subdomains; lists
+can be imported in plain or hosts-file format.
+
+![DNS filtering](docs/screenshots/04-dns-filtering.png)
+
+### Query log
+Every query with its client, type and result (forwarded, cached, blocked, refused, failed).
+
+![Query log](docs/screenshots/05-query-log.png)
+
+### Firewall
+Networks blocked by source, destination or both, and the nftables ruleset
+actually applied to the kernel (only the `inet isp_netcontrol` table).
+
+![Firewall](docs/screenshots/06-firewall.png)
+
+### DNS settings
+Upstream resolvers, allowed client networks (no open resolver) and how
+blocked names are answered.
+
+![DNS settings](docs/screenshots/07-dns-settings.png)
+
+### License
+License status, hardware ID, online and offline activation, and status sync.
+
+![License](docs/screenshots/08-license.png)
+
+### Audit log
+Every sign-in and administrative change.
+
+![Audit log](docs/screenshots/09-audit-log.png)
+
+### Sign-in with mandatory two-factor authentication
+
+| Sign-in | Two-factor code |
+|---|---|
+| ![Sign-in](docs/screenshots/01-sign-in.png) | ![Two-factor code](docs/screenshots/02-two-factor.png) |
+
 ## Documentation
 
 - [Installation](docs/INSTALL.md)
