@@ -47,6 +47,8 @@ type Config struct {
 	TrustedProxies    []string
 	QueryLogDays      int
 	CacheSize         int
+	TLSDir            string // console certificate, also used for DNS over TLS
+	DoTPort           int    // DNS over TLS port (default 853)
 
 	// trustedPEM replaces the built-in signing keys. It is unexported on
 	// purpose: only this package's tests can set it, never the environment.
@@ -79,6 +81,7 @@ func ConfigFromEnv() (Config, error) {
 		BootstrapEmail:    env("NC_BOOTSTRAP_ADMIN_EMAIL", ""),
 		BootstrapPassword: env("NC_BOOTSTRAP_ADMIN_PASSWORD", ""),
 		TrustedProxies:    strings.Split(env("NC_TRUSTED_PROXIES", "127.0.0.1,::1"), ","),
+		TLSDir:            env("NC_TLS_DIR", "/etc/isp-netcontrol/tls"),
 	}
 	var err error
 	if c.SyncInterval, err = time.ParseDuration(env("NC_SYNC_INTERVAL", "6h")); err != nil || c.SyncInterval < time.Second {
@@ -89,6 +92,9 @@ func ConfigFromEnv() (Config, error) {
 	}
 	if _, err := fmt.Sscan(env("NC_CACHE_SIZE", "100000"), &c.CacheSize); err != nil || c.CacheSize < 1000 {
 		return c, errors.New("NC_CACHE_SIZE must be a number of answers, at least 1000")
+	}
+	if _, err := fmt.Sscan(env("NC_DOT_PORT", "853"), &c.DoTPort); err != nil || c.DoTPort < 1 || c.DoTPort > 65535 {
+		return c, errors.New("NC_DOT_PORT must be a port number")
 	}
 	if v := env("NC_DEFAULT_UPSTREAMS", ""); v != "" {
 		ds := DNSSettings{Upstreams: strings.Split(v, ","), BlockMode: "nxdomain", SinkholeV4: "0.0.0.0", SinkholeV6: "::", AllowedClients: []string{"127.0.0.0/8"}}
@@ -108,13 +114,14 @@ func ConfigFromEnv() (Config, error) {
 
 // App is a running ISP NetControl instance.
 type App struct {
-	cfg  Config
-	db   *pgxpool.Pool
-	auth *authkit.Auth
-	lic  *license.Manager
-	dns  *dnsserver.Server
-	fw   *firewall.Manager
-	web  *fiber.App
+	cfg   Config
+	db    *pgxpool.Pool
+	auth  *authkit.Auth
+	lic   *license.Manager
+	dns   *dnsserver.Server
+	fw    *firewall.Manager
+	web   *fiber.App
+	certs *certStore
 
 	applyMu  sync.Mutex
 	fwStatus fwState
@@ -147,7 +154,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	if err := waitForDB(ctx, db); err != nil {
 		return nil, err
 	}
-	a := &App{cfg: cfg, db: db, fw: &firewall.Manager{NFT: cfg.NFTPath, Enabled: cfg.FirewallEnabled}}
+	a := &App{cfg: cfg, db: db, fw: &firewall.Manager{NFT: cfg.NFTPath, Enabled: cfg.FirewallEnabled}, certs: &certStore{dir: cfg.TLSDir}}
 	if err := a.migrate(ctx); err != nil {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
@@ -220,6 +227,9 @@ func (a *App) Run(ctx context.Context) error {
 	if err := a.startDNS(ctx); err != nil {
 		return err
 	}
+	if err := a.applyDoT(ctx); err != nil {
+		log.Printf("dns: DNS over TLS not started: %v", err)
+	}
 	errc := make(chan error, 1)
 	go func() {
 		log.Printf("console API listening on %s", a.cfg.HTTPAddr)
@@ -288,6 +298,9 @@ func (a *App) routes() *fiber.App {
 		}
 		return c.JSON(fiber.Map{"ok": true, "license_mode": st.Mode})
 	})
+	// DNS over HTTPS for subscribers (no session; access list and protection apply).
+	app.Get("/dns-query", a.dohQuery)
+	app.Post("/dns-query", a.dohQuery)
 	api := app.Group("/api", a.auth.OriginGuard())
 	a.auth.Mount(api.Group("/auth"))
 	p := api.Group("", a.auth.Require())
@@ -307,6 +320,8 @@ func (a *App) routes() *fiber.App {
 	p.Get("/dns/listen", a.getListen)
 	p.Put("/dns/listen", a.updateListen)
 	p.Put("/dns/settings", a.updateDNSSettings)
+	p.Get("/dns/encrypted", a.getEncrypted)
+	p.Put("/dns/encrypted", a.updateEncrypted)
 	p.Get("/dns/protection", a.getProtection)
 	p.Put("/dns/protection", a.updateProtection)
 	p.Get("/dns/stats", a.dnsStats)

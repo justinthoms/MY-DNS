@@ -147,6 +147,8 @@ func (a *App) listenWatcher(ctx context.Context) {
 		}
 		if err := a.dns.Listen(want); err != nil {
 			log.Printf("dns: interface addresses changed but rebinding failed: %v", err)
+		} else if err := a.applyDoT(ctx); err != nil {
+			log.Printf("dns: DNS over TLS not moved to the new addresses: %v", err)
 		}
 	}
 }
@@ -186,6 +188,9 @@ func (a *App) updateListen(c *fiber.Ctx) error {
 	}
 	if err := a.putSetting(c.UserContext(), "dns.listen", s); err != nil {
 		return err
+	}
+	if err := a.applyDoT(c.UserContext()); err != nil {
+		log.Printf("dns: DNS over TLS not moved to the new addresses: %v", err)
 	}
 	a.auth.AuditC(c, "dns.listen_changed", "", fiber.Map{"settings": s, "addresses": addrs})
 	return c.JSON(fiber.Map{"settings": s, "active": a.dns.Addrs()})

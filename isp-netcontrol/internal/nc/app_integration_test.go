@@ -9,13 +9,20 @@ package nc
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -39,6 +46,15 @@ type testEnv struct {
 	cookie string
 	csrf   string
 	dns    string
+}
+
+func freeTCPPort(t *testing.T) int {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port
 }
 
 func newTestEnv(t *testing.T) *testEnv {
@@ -84,6 +100,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		FirewallEnabled: false, SyncInterval: time.Hour, CookieSecure: false, RequireTOTP: false,
 		BootstrapEmail: "noc@isp.example", BootstrapPassword: "Bootstrap-Pass-123",
 		TrustedProxies: []string{"127.0.0.1"}, QueryLogDays: 7,
+		TLSDir: filepath.Join(dir, "tls"), DoTPort: freeTCPPort(t),
 		trustedPEM: licensecore.EncodePublicKey(pub),
 	}
 	runCtx, cancel := context.WithCancel(context.Background())
@@ -623,4 +640,88 @@ func TestIntegrationProtection(t *testing.T) {
 	if r := e.query("host.lan", dns.TypeANY); len(r.Answer) != 1 || r.Answer[0].Header().Rrtype != dns.TypeHINFO {
 		t.Fatalf("ANY: %v", r)
 	}
+}
+
+func TestIntegrationEncryptedDNS(t *testing.T) {
+	e := newTestEnv(t)
+	// Certificate the console (and DNS over TLS) uses.
+	cert, pool := testCertPEM(t, e.app.cfg.TLSDir)
+	_ = cert
+	got := e.call("GET", "/api/dns/encrypted", nil, 200)
+	if got["settings"].(map[string]any)["dot"] != false || got["certificate"].(map[string]any)["ok"] != true {
+		t.Fatalf("initial %v", got)
+	}
+	// DoH is off by default: the endpoint does not exist.
+	e.raw("GET", "/dns-query?dns=AAABAAABAAAAAAAAA3d3dwdleGFtcGxlA2NvbQAAAQAB", nil, 404)
+
+	got = e.call("PUT", "/api/dns/encrypted", map[string]bool{"dot": true, "doh": true}, 200)
+	if l := got["dot_listening"].([]any); len(l) != 1 {
+		t.Fatalf("dot_listening %v", got)
+	}
+	e.call("POST", "/api/dns/records", map[string]any{"name": "host.lan", "type": "A", "value": "10.0.0.1"}, 201)
+
+	// DNS over TLS on the derived address.
+	c := &dns.Client{Net: "tcp-tls", Timeout: 3 * time.Second, TLSConfig: &tls.Config{RootCAs: pool, ServerName: "dns.test"}}
+	m := new(dns.Msg)
+	m.SetQuestion("host.lan.", dns.TypeA)
+	r, _, err := c.Exchange(m, e.app.dns.TLSAddrs()[0])
+	if err != nil || len(r.Answer) != 1 {
+		t.Fatalf("DNS over TLS: %v %v", r, err)
+	}
+
+	// DNS over HTTPS, GET and POST. The test client's address must be allowed.
+	set := e.call("GET", "/api/dns/settings", nil, 200)
+	set["allowed_clients"] = append(set["allowed_clients"].([]any), "0.0.0.0/32")
+	e.call("PUT", "/api/dns/settings", set, 200)
+	m.Id = 0
+	wire, _ := m.Pack()
+	body := e.raw("GET", "/dns-query?dns="+base64.RawURLEncoding.EncodeToString(wire), nil, 200)
+	resp := new(dns.Msg)
+	if err := resp.Unpack(body); err != nil || len(resp.Answer) != 1 || resp.Answer[0].(*dns.A).A.String() != "10.0.0.1" {
+		t.Fatalf("DoH GET: %v %v", resp, err)
+	}
+	req := httptest.NewRequest("POST", "/dns-query", bytes.NewReader(wire))
+	req.Header.Set("Content-Type", "application/dns-message")
+	hr, err := e.app.web.Test(req, 5000)
+	if err != nil || hr.StatusCode != 200 || hr.Header.Get("Content-Type") != "application/dns-message" {
+		t.Fatalf("DoH POST: %v %v", hr, err)
+	}
+	e.raw("GET", "/dns-query?dns=!!!", nil, 400)
+
+	// Encrypted upstreams are accepted and normalised.
+	set["upstreams"] = []string{"tls://1.1.1.1#cloudflare-dns.com", "9.9.9.9"}
+	saved := e.call("PUT", "/api/dns/settings", set, 200)
+	if ups := saved["upstreams"].([]any); ups[0] != "tls://1.1.1.1:853#cloudflare-dns.com" || ups[1] != "9.9.9.9:53" {
+		t.Fatalf("upstreams %v", ups)
+	}
+	set["upstreams"] = []string{"tls://dns.google"}
+	e.call("PUT", "/api/dns/settings", set, 400)
+
+	// Turning DoT off closes the port.
+	e.call("PUT", "/api/dns/encrypted", map[string]bool{"dot": false, "doh": false}, 200)
+	if len(e.app.dns.TLSAddrs()) != 0 {
+		t.Fatal("DNS over TLS still on")
+	}
+}
+
+// testCertPEM writes a self-signed certificate for "dns.test" to dir as
+// fullchain.pem and privkey.pem and returns a pool that trusts it.
+func testCertPEM(t *testing.T, dir string) (tls.Certificate, *x509.CertPool) {
+	t.Helper()
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(7), Subject: pkix.Name{CommonName: "dns.test"}, DNSNames: []string{"dns.test"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(24 * time.Hour), IsCA: true, BasicConstraintsValid: true,
+		KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kb, _ := x509.MarshalECPrivateKey(key)
+	_ = os.MkdirAll(dir, 0o700)
+	_ = os.WriteFile(filepath.Join(dir, "fullchain.pem"), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "privkey.pem"), pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: kb}), 0o600)
+	c, _ := x509.ParseCertificate(der)
+	pool := x509.NewCertPool()
+	pool.AddCert(c)
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, pool
 }

@@ -17,6 +17,10 @@
   working. Active attacks and rate-limited clients are shown on the
   Protection page, the dashboard's system health and the query log
   (`ratelimited`, `throttled`).
+- **Encrypted DNS**: DNS over TLS (port 853) and DNS over HTTPS
+  (`/dns-query`) for subscribers, using the console certificate (reloaded
+  when renewed), switchable under DNS settings. Upstreams can be encrypted
+  with `tls://IP#name` (certificate checked, connections reused).
 - `dnsbench`: load generator and stand-in upstream for capacity tests.
 
 ### Faster

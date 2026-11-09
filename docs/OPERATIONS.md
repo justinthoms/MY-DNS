@@ -121,6 +121,44 @@ dig @127.0.0.1 -p 5335 dnssec-failed.org
 The last one must return `SERVFAIL` (that domain is deliberately signed
 wrongly). Unbound needs outbound UDP and TCP port 53 to the internet.
 
+## Encrypted DNS
+
+**DNS settings → Encrypted DNS for subscribers** turns on:
+
+- **DNS over TLS** (RFC 7858) on TCP port 853 of every DNS listen address.
+  Android: *Settings → Network → Private DNS → hostname* `dns.your-isp.example`.
+- **DNS over HTTPS** (RFC 8484) at `https://dns.your-isp.example/dns-query`
+  (GET and POST), for browsers, Windows 11 and Apple profiles.
+
+Both use the console certificate (`/opt/isp-netcontrol/tls/`), and the same
+access list, attack protection and filtering as plain DNS. Phones and
+browsers only accept a **trusted certificate for a hostname**, so install a
+real certificate, for example from Let's Encrypt:
+
+```bash
+sudo ./isp-netcontrol/scripts/install.sh --admin-email noc@your-isp.example --domain dns.your-isp.example --tls-cert /etc/letsencrypt/live/dns.your-isp.example/fullchain.pem --tls-key /etc/letsencrypt/live/dns.your-isp.example/privkey.pem
+```
+
+A renewed certificate copied into `/opt/isp-netcontrol/tls/` is picked up by
+DNS over TLS automatically; reload Nginx for DNS over HTTPS:
+
+```bash
+sudo docker compose exec nginx nginx -s reload
+```
+
+Open TCP 853 and 443 in any firewall in front of the server.
+`NC_DOT_PORT` in `.env` changes the DNS-over-TLS port.
+
+### Encrypted upstreams
+
+To encrypt the queries this server sends to a public resolver, enter it in
+**Upstream resolvers** as `tls://IP#certificate-name`, for example
+`tls://1.1.1.1#cloudflare-dns.com`, `tls://8.8.8.8#dns.google` or
+`tls://9.9.9.9#dns.quad9.net` (port 853 unless given). The certificate is
+checked against the name; connections are kept open and reused, so only the
+first query pays for the TLS handshake. With Unbound (`127.0.0.1:5335`)
+queries go to the authoritative servers directly and this is not needed.
+
 ## Attack protection
 
 **Protection** in the console shows what the defences are doing and lets

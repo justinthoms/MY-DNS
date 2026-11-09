@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { put } from "@/lib/api";
 import { Alert, Shell, useAction, useLoad } from "@/components/ui";
 import ListenPanel from "@/components/ListenPanel";
+import EncryptedPanel from "@/components/EncryptedPanel";
 
 type Settings = { upstreams: string[]; block_mode: string; sinkhole_v4: string; sinkhole_v6: string; allowed_clients: string[]; filtering_enabled: boolean };
 
@@ -33,7 +34,8 @@ export default function SettingsPage() {
       <Alert kind="success">{act.ok}</Alert>
       {f && (
         <form className="panel stack" onSubmit={save}>
-          <label>Upstream resolvers (one per line, IP or IP:port)<textarea style={{ minHeight: 80 }} value={ups} onChange={(e) => setUps(e.target.value)} /></label>
+          <label>Upstream resolvers (one per line)<textarea style={{ minHeight: 80 }} value={ups} onChange={(e) => setUps(e.target.value)} /></label>
+          <p className="muted" style={{ margin: "-6px 0 0" }}>IP or IP:port, for example <span className="mono">127.0.0.1:5335</span> (Unbound on this server). Encrypted (DNS over TLS): <span className="mono">tls://1.1.1.1#cloudflare-dns.com</span>, <span className="mono">tls://8.8.8.8#dns.google</span>, <span className="mono">tls://9.9.9.9#dns.quad9.net</span>.</p>
           <label>Allowed client networks (one CIDR per line)
             <textarea style={{ minHeight: 120 }} value={clients} onChange={(e) => setClients(e.target.value)} />
           </label>
@@ -54,6 +56,7 @@ export default function SettingsPage() {
           <div><button disabled={act.busy}>Save</button></div>
         </form>
       )}
+      <EncryptedPanel />
     </Shell>
   );
 }

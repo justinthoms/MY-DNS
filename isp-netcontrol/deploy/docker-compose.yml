@@ -54,11 +54,15 @@ services:
       NC_QUERY_LOG_DAYS: ${NC_QUERY_LOG_DAYS:-7}
       NC_CACHE_SIZE: ${NC_CACHE_SIZE:-100000}
       NC_DEFAULT_UPSTREAMS: ${NC_DEFAULT_UPSTREAMS:-}
+      NC_TLS_DIR: /etc/isp-netcontrol/tls
+      NC_DOT_PORT: ${NC_DOT_PORT:-853}
       NC_BOOTSTRAP_ADMIN_EMAIL: ${NC_BOOTSTRAP_ADMIN_EMAIL:-}
       NC_BOOTSTRAP_ADMIN_PASSWORD: ${NC_BOOTSTRAP_ADMIN_PASSWORD:-}
     volumes:
       - ${NC_STATE_HOST_DIR:-/var/lib/isp-netcontrol}:/var/lib/isp-netcontrol
       - /etc/machine-id:/host/machine-id:ro
+      # Console certificate, also served for DNS over TLS.
+      - ${TLS_DIR:-./tls}:/etc/isp-netcontrol/tls:ro
 
   web:
     build:

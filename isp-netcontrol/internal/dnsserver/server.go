@@ -98,6 +98,11 @@ type Server struct {
 	flight  flight
 	limiter *limiter
 	torture *tortureGuard
+	dot     dotPool
+
+	tlsMu      sync.Mutex // guards tlsServers and tlsAddrs (DNS over TLS)
+	tlsServers []*dns.Server
+	tlsAddrs   []string
 
 	sampleSeq atomic.Uint64
 	client    *dns.Client
@@ -259,8 +264,9 @@ func (s *Server) ListenAndServe(ctx context.Context, addrs []string) error {
 // Shutdown stops all listeners.
 func (s *Server) Shutdown() {
 	s.lmu.Lock()
-	defer s.lmu.Unlock()
 	s.stopLocked()
+	s.lmu.Unlock()
+	_ = s.ListenTLS(nil, nil)
 }
 
 // Decide returns the filtering decision for a name: "allowed", "blocked" or
@@ -493,8 +499,11 @@ func (s *Server) forward(p *Policy, req *dns.Msg) (*dns.Msg, error) {
 	var lastErr error = errors.New("no upstream resolvers configured")
 	for _, up := range p.Upstreams {
 		t0 := time.Now()
-		resp, _, err := s.client.Exchange(out, up)
-		if err == nil && resp.Truncated {
+		var resp *dns.Msg
+		var err error
+		if strings.HasPrefix(up, "tls://") {
+			resp, err = s.dot.exchange(out, up)
+		} else if resp, _, err = s.client.Exchange(out, up); err == nil && resp.Truncated {
 			resp, _, err = s.tcp.Exchange(out, up)
 		}
 		if err == nil && (resp.Rcode == dns.RcodeServerFailure || resp.Rcode == dns.RcodeRefused) {

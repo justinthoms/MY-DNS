@@ -60,12 +60,20 @@ func (s *DNSSettings) Validate() error {
 	}
 	for i, u := range s.Upstreams {
 		u = strings.TrimSpace(u)
+		if strings.HasPrefix(u, "tls://") {
+			addr, name, err := dnsserver.ParseTLSUpstream(u)
+			if err != nil {
+				return err
+			}
+			s.Upstreams[i] = "tls://" + addr + "#" + name
+			continue
+		}
 		if _, _, err := net.SplitHostPort(u); err != nil {
 			u = net.JoinHostPort(u, "53")
 		}
 		host, _, _ := net.SplitHostPort(u)
 		if _, err := netip.ParseAddr(host); err != nil {
-			return fmt.Errorf("upstream %q must be an IP address (optionally with :port)", s.Upstreams[i])
+			return fmt.Errorf("upstream %q must be an IP address (optionally with :port), or tls://IP#name for DNS over TLS", s.Upstreams[i])
 		}
 		s.Upstreams[i] = u
 	}
