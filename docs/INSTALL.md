@@ -37,11 +37,11 @@ key automatically through the signed endorsement chain (see
 ## 2. Install
 
 ```bash
-unzip isp-netcontrol-1.4.2.zip -d isp-netcontrol-1.4.2
+unzip isp-netcontrol-1.4.3.zip -d isp-netcontrol-1.4.3
 ```
 
 ```bash
-cd isp-netcontrol-1.4.2
+cd isp-netcontrol-1.4.3
 ```
 
 ```bash

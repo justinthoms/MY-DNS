@@ -131,7 +131,10 @@ fi
 # ISP NetControl runs its own Unbound instance (own configuration, systemd
 # unit and trust anchor) on 127.0.0.1:5335. It never merges with or changes
 # a system Unbound configuration that may already exist on the server.
-UNBOUND_DIR=/etc/isp-netcontrol
+# Under /etc/unbound so Ubuntu's AppArmor profile for unbound lets it read the
+# file; the system Unbound only loads unbound.conf and conf.d/*.conf, so this
+# directory is never part of its configuration.
+UNBOUND_DIR=/etc/unbound/isp-netcontrol
 UNBOUND_CONF="$UNBOUND_DIR/unbound.conf"
 UNBOUND_UNIT=isp-netcontrol-unbound.service
 UNBOUND_KEY=/var/lib/unbound/isp-netcontrol-root.key
@@ -146,6 +149,14 @@ system_unbound_customised() {
 
 # v1.4.0 put its settings into the system Unbound's conf.d; take them out
 # again, so the system configuration is exactly as it was before.
+# v1.4.2 kept the configuration in /etc/isp-netcontrol, which AppArmor does
+# not let unbound read; move the marker and drop the old file.
+if [ -d /etc/isp-netcontrol ]; then
+  [ -f /etc/isp-netcontrol/unbound-was-ours ] && { install -d "$UNBOUND_DIR"; mv /etc/isp-netcontrol/unbound-was-ours "$UNBOUND_DIR/"; }
+  pkill -f "unbound -c /etc/isp-netcontrol/unbound.conf" 2>/dev/null || true
+  rm -f /etc/isp-netcontrol/unbound.conf
+  rmdir /etc/isp-netcontrol 2>/dev/null || true
+fi
 if [ -f "$OLD_UNBOUND_CONF" ]; then
   say "Removing the v1.4.0 Unbound settings from /etc/unbound/unbound.conf.d"
   rm -f "$OLD_UNBOUND_CONF"

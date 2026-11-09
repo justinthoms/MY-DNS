@@ -28,20 +28,21 @@ fi
 rm -f /etc/cron.d/isp-netcontrol-backup
 # ISP NetControl's own Unbound instance (--with-unbound). A system Unbound
 # configuration of the administrator is not touched.
-if [ -f /etc/isp-netcontrol/unbound.conf ] || [ -f /etc/systemd/system/isp-netcontrol-unbound.service ]; then
-  systemctl disable --now isp-netcontrol-unbound.service >/dev/null 2>&1 || pkill -f "unbound -c /etc/isp-netcontrol/unbound.conf" 2>/dev/null || true
-  rm -f /etc/systemd/system/isp-netcontrol-unbound.service /etc/isp-netcontrol/unbound.conf /var/lib/unbound/isp-netcontrol-root.key
+if [ -f /etc/unbound/isp-netcontrol/unbound.conf ] || [ -f /etc/systemd/system/isp-netcontrol-unbound.service ]; then
+  systemctl disable --now isp-netcontrol-unbound.service >/dev/null 2>&1 || pkill -f "unbound -c /etc/unbound/isp-netcontrol/unbound.conf" 2>/dev/null || true
+  rm -f /etc/systemd/system/isp-netcontrol-unbound.service /etc/unbound/isp-netcontrol/unbound.conf /var/lib/unbound/isp-netcontrol-root.key
   systemctl daemon-reload >/dev/null 2>&1 || true
-  if [ -f /etc/isp-netcontrol/unbound-was-ours ]; then
+  if [ -f /etc/unbound/isp-netcontrol/unbound-was-ours ]; then
     # The unbound package was installed only for ISP NetControl.
     systemctl unmask unbound.service unbound-resolvconf.service >/dev/null 2>&1 || true
-    rm -f /etc/isp-netcontrol/unbound-was-ours
+    rm -f /etc/unbound/isp-netcontrol/unbound-was-ours
     echo "Unbound stopped. The package stays installed; remove it with: sudo apt purge unbound"
   fi
-  rmdir /etc/isp-netcontrol 2>/dev/null || true
+  rmdir /etc/unbound/isp-netcontrol 2>/dev/null || true
 fi
-# Settings left by v1.4.0 in the system Unbound.
-rm -f /etc/unbound/unbound.conf.d/isp-netcontrol.conf
+# Settings left by v1.4.0 and v1.4.2.
+rm -f /etc/unbound/unbound.conf.d/isp-netcontrol.conf /etc/isp-netcontrol/unbound.conf
+rmdir /etc/isp-netcontrol 2>/dev/null || true
 if [ "$PURGE" -eq 1 ]; then
   rm -rf -- "$STATE_DIR"
   case "$DIR" in /opt/*) rm -rf -- "$DIR" ;; *) echo "not deleting $DIR automatically (outside /opt); remove it yourself" ;; esac

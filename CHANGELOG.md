@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.4.3 (2026-11-09)
+
+### Fixed
+- The Unbound instance of v1.4.2 could not start on Ubuntu ("Could not open
+  /etc/isp-netcontrol/unbound.conf: Permission denied"): Ubuntu's AppArmor
+  profile only lets unbound read files under /etc/unbound. The configuration
+  is now `/etc/unbound/isp-netcontrol/unbound.conf` (still separate from the
+  system Unbound's configuration). Upgrading moves it.
+
 ## v1.4.2 (2026-11-09)
 
 ### Fixed

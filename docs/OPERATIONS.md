@@ -104,7 +104,7 @@ Upstream resolvers** to `127.0.0.1:5335` to switch. Keep a public resolver
 as a second upstream if you want a fallback.
 
 It is ISP NetControl's own Unbound instance (service
-`isp-netcontrol-unbound`, configuration `/etc/isp-netcontrol/unbound.conf`),
+`isp-netcontrol-unbound`, configuration `/etc/unbound/isp-netcontrol/unbound.conf`),
 separate from any Unbound the server already runs: an existing
 `/etc/unbound` configuration is never changed. Re-running the installer
 rewrites the configuration. Check it:
