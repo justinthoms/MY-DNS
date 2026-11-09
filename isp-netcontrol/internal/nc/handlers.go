@@ -314,7 +314,7 @@ func (a *App) queryLogWriter(ctx context.Context) {
 				client = ev.Client
 			}
 			batch = append(batch, []any{ev.At, client, trunc(ev.Name, 253), ev.Type, ev.Action, trunc(ev.Category, 64)})
-			if len(batch) >= 1000 {
+			if len(batch) >= 5000 {
 				flush()
 			}
 		case <-tick.C:

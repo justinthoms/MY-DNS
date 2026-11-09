@@ -6,7 +6,7 @@ import { put, fmtTime } from "@/lib/api";
 import { Alert, LicenseRequired, Shell, useAction, useLoad } from "@/components/ui";
 
 type Entry = { at: string; client: string; name: string; type: string; action: string };
-type Page = { entries: Entry[]; total: number; page: number; pages: number; page_size: number; retention_hours: number };
+type Page = { entries: Entry[]; total: number; page: number; pages: number; page_size: number; retention_hours: number; mode: "all" | "important" | "off"; sample: number; dropped: number };
 
 const TABS: [string, string][] = [["", "All"], ["blocked", "Blocked"], ["refused", "Refused"], ["failed", "Failed"], ["local", "Local"], ["cached", "Cached"], ["forwarded", "Forwarded"]];
 const RETENTION: [number, string][] = [[1, "1 hour"], [6, "6 hours"], [12, "12 hours"], [24, "24 hours"], [72, "3 days"], [168, "7 days"], [720, "30 days"]];
@@ -45,14 +45,32 @@ function QueryLogInner() {
     if (v.size !== 50) sp.set("size", String(v.size));
     router.push(`/querylog${sp.size ? "?" + sp.toString() : ""}`);
   };
-  const setRetention = (h: number) =>
-    act.run(() => put("/dns/querylog/settings", { retention_hours: h }), `Queries older than ${RETENTION.find((r) => r[0] === h)?.[1] ?? h + " hours"} are now deleted automatically.`).then((ok) => ok && reload());
+  const saveSettings = (next: Partial<{ retention_hours: number; mode: string; sample: number }>, msg: string) =>
+    data && act.run(() => put("/dns/querylog/settings", { retention_hours: data.retention_hours, mode: data.mode, sample: data.sample, ...next }), msg).then((ok) => ok && reload());
+  const setRetention = (h: number) => saveSettings({ retention_hours: h }, `Queries older than ${RETENTION.find((r) => r[0] === h)?.[1] ?? h + " hours"} are now deleted automatically.`);
 
   if (licenseError) return <Shell><h1>Query log</h1><LicenseRequired message={licenseError} /></Shell>;
   return (
     <Shell>
       <div className="toprow">
         <h1>Query log</h1>
+        <div className="row" style={{ alignItems: "center", gap: 14 }}>
+        <label className="row" style={{ alignItems: "center", flexDirection: "row", gap: 8 }}>
+          Log
+          <select value={data?.mode ?? "all"} onChange={(e) => saveSettings({ mode: e.target.value }, "Query logging updated.")}>
+            <option value="all">every query</option>
+            <option value="important">blocked, refused and failed only</option>
+            <option value="off">nothing</option>
+          </select>
+        </label>
+        {data?.mode === "all" && (
+          <label className="row" style={{ alignItems: "center", flexDirection: "row", gap: 8 }} title="On busy servers, keep only a sample of allowed queries. Blocked, refused and failed queries are always logged.">
+            Allowed queries
+            <select value={data?.sample ?? 1} onChange={(e) => saveSettings({ sample: Number(e.target.value) }, "Sampling updated.")}>
+              {[1, 10, 100, 1000].map((n) => <option key={n} value={n}>{n === 1 ? "all" : `1 in ${n}`}</option>)}
+            </select>
+          </label>
+        )}
         <label className="row" style={{ alignItems: "center", flexDirection: "row", gap: 8 }}>
           Keep queries for
           <select value={data?.retention_hours ?? ""} onChange={(e) => setRetention(Number(e.target.value))}>
@@ -60,7 +78,15 @@ function QueryLogInner() {
             {RETENTION.map(([h, l]) => <option key={h} value={h}>{l}</option>)}
           </select>
         </label>
+        </div>
       </div>
+      {data && data.dropped > 0 && (
+        <Alert kind="warn">
+          {data.dropped.toLocaleString("en-IN")} log entries were dropped because the database could not keep up with the query rate.
+          DNS answers were not affected. Log only blocked queries, or sample allowed ones, to keep the log complete.
+        </Alert>
+      )}
+      {data && data.mode === "all" && data.sample > 1 && <p className="muted" style={{ marginTop: -6 }}>Allowed queries are sampled: 1 in {data.sample} is logged. Blocked, refused and failed queries are all logged.</p>}
       <Alert kind="error">{error || act.error}</Alert>
       <Alert kind="success">{act.ok}</Alert>
       <div className="panel">

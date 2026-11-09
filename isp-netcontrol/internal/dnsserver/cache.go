@@ -1,6 +1,7 @@
 package dnsserver
 
 import (
+	"hash/maphash"
 	"strings"
 	"sync"
 	"time"
@@ -8,8 +9,21 @@ import (
 	"github.com/miekg/dns"
 )
 
-// cache is a small TTL-respecting answer cache.
+// cache is a sharded, TTL-respecting answer cache. Each shard has its own
+// lock, so concurrent queries rarely wait for each other, and eviction is
+// constant time: when a shard is full a few entries are dropped (expired
+// ones first) instead of scanning the whole cache.
 type cache struct {
+	seed   maphash.Seed
+	shards [cacheShards]cacheShard
+}
+
+const (
+	cacheShards   = 64
+	evictPerShard = 8
+)
+
+type cacheShard struct {
 	mu      sync.Mutex
 	max     int
 	entries map[string]cacheEntry
@@ -21,7 +35,23 @@ type cacheEntry struct {
 	expires time.Time
 }
 
-func newCache(max int) *cache { return &cache{max: max, entries: map[string]cacheEntry{}} }
+// DefaultCacheSize is the number of answers cached when not configured.
+const DefaultCacheSize = 100_000
+
+func newCache(max int) *cache {
+	if max < cacheShards {
+		max = cacheShards
+	}
+	c := &cache{seed: maphash.MakeSeed()}
+	for i := range c.shards {
+		c.shards[i] = cacheShard{max: max / cacheShards, entries: map[string]cacheEntry{}}
+	}
+	return c
+}
+
+func (c *cache) shard(key string) *cacheShard {
+	return &c.shards[maphash.String(c.seed, key)%cacheShards]
+}
 
 func cacheKey(req *dns.Msg) string {
 	q := req.Question[0]
@@ -42,9 +72,24 @@ func cacheKey(req *dns.Msg) string {
 }
 
 func (c *cache) clear() {
-	c.mu.Lock()
-	c.entries = map[string]cacheEntry{}
-	c.mu.Unlock()
+	for i := range c.shards {
+		s := &c.shards[i]
+		s.mu.Lock()
+		s.entries = map[string]cacheEntry{}
+		s.mu.Unlock()
+	}
+}
+
+// size returns the number of cached answers.
+func (c *cache) size() int {
+	n := 0
+	for i := range c.shards {
+		s := &c.shards[i]
+		s.mu.Lock()
+		n += len(s.entries)
+		s.mu.Unlock()
+	}
+	return n
 }
 
 func minTTL(m *dns.Msg) uint32 {
@@ -72,30 +117,35 @@ func (c *cache) put(req, resp *dns.Msg) {
 	if ttl == 0 {
 		return
 	}
+	key := cacheKey(req)
 	now := time.Now()
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if len(c.entries) >= c.max {
-		// Evict expired entries, then arbitrary ones if still full.
-		for k, e := range c.entries {
-			if now.After(e.expires) {
-				delete(c.entries, k)
+	e := cacheEntry{msg: resp.Copy(), stored: now, expires: now.Add(time.Duration(ttl) * time.Second)}
+	s := c.shard(key)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.entries[key]; !exists && len(s.entries) >= s.max {
+		// Drop a few entries: expired ones if any are found, otherwise
+		// whatever the map yields first (random order). Constant time.
+		dropped := 0
+		for k, x := range s.entries {
+			if now.After(x.expires) || dropped < 1 {
+				delete(s.entries, k)
+				dropped++
 			}
-		}
-		for k := range c.entries {
-			if len(c.entries) < c.max {
+			if dropped >= evictPerShard {
 				break
 			}
-			delete(c.entries, k)
 		}
 	}
-	c.entries[cacheKey(req)] = cacheEntry{msg: resp.Copy(), stored: now, expires: now.Add(time.Duration(ttl) * time.Second)}
+	s.entries[key] = e
 }
 
 func (c *cache) get(req *dns.Msg) *dns.Msg {
-	c.mu.Lock()
-	e, ok := c.entries[cacheKey(req)]
-	c.mu.Unlock()
+	key := cacheKey(req)
+	s := c.shard(key)
+	s.mu.Lock()
+	e, ok := s.entries[key]
+	s.mu.Unlock()
 	now := time.Now()
 	if !ok || now.After(e.expires) {
 		return nil
@@ -116,4 +166,19 @@ func (c *cache) get(req *dns.Msg) *dns.Msg {
 		}
 	}
 	return m
+}
+
+// sweep removes expired entries, one shard at a time.
+func (c *cache) sweep() {
+	now := time.Now()
+	for i := range c.shards {
+		s := &c.shards[i]
+		s.mu.Lock()
+		for k, e := range s.entries {
+			if now.After(e.expires) {
+				delete(s.entries, k)
+			}
+		}
+		s.mu.Unlock()
+	}
 }

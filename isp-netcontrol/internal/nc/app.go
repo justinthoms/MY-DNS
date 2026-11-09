@@ -46,6 +46,7 @@ type Config struct {
 	BootstrapPassword string
 	TrustedProxies    []string
 	QueryLogDays      int
+	CacheSize         int
 
 	// trustedPEM replaces the built-in signing keys. It is unexported on
 	// purpose: only this package's tests can set it, never the environment.
@@ -85,6 +86,9 @@ func ConfigFromEnv() (Config, error) {
 	}
 	if _, err := fmt.Sscan(env("NC_QUERY_LOG_DAYS", "7"), &c.QueryLogDays); err != nil || c.QueryLogDays < 1 {
 		return c, errors.New("NC_QUERY_LOG_DAYS must be a positive number")
+	}
+	if _, err := fmt.Sscan(env("NC_CACHE_SIZE", "100000"), &c.CacheSize); err != nil || c.CacheSize < 1000 {
+		return c, errors.New("NC_CACHE_SIZE must be a number of answers, at least 1000")
 	}
 	if c.DatabaseURL == "" {
 		return c, errors.New("NC_DATABASE_URL is required")
@@ -160,7 +164,11 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	a.dns = dnsserver.New(pol)
+	var dnsOpts []dnsserver.Option
+	if cfg.CacheSize > 0 {
+		dnsOpts = append(dnsOpts, dnsserver.WithCacheSize(cfg.CacheSize))
+	}
+	a.dns = dnsserver.New(pol, dnsOpts...)
 	a.anycast = a.newAnycastMonitor()
 	a.web = a.routes()
 	return a, nil

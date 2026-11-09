@@ -31,6 +31,8 @@ type Policy struct {
 	AllowedClients []netip.Prefix    // who may query (prevents an open resolver)
 	Records        Records           // local DNS records; answered before filtering
 	LogQueries     bool              // query-log feature licensed
+	LogMode        string            // "all" (default), "important" (blocked/refused/failed only) or "off"
+	LogSample      int               // with "all": log 1 in N allowed queries (blocked/refused/failed always)
 }
 
 // QueryEvent is emitted for the query log.
@@ -58,6 +60,11 @@ type Stats struct {
 	// LatencyUsSum / LatencyCount: upstream response time of forwarded queries.
 	LatencyUsSum uint64 `json:"latency_us_sum"`
 	LatencyCount uint64 `json:"latency_count"`
+	// Coalesced counts forwarded queries answered by an identical query
+	// already in flight (no extra upstream query was sent).
+	Coalesced uint64 `json:"coalesced"`
+	// LogDropped counts query-log entries dropped because the writer was busy.
+	LogDropped uint64 `json:"log_dropped"`
 }
 
 // Sub returns the counters accumulated since an earlier snapshot.
@@ -83,24 +90,44 @@ type Server struct {
 	servers []*dns.Server
 	addrs   []string
 	stats   struct {
-		total, forwarded, cached, blocked, refused, failed, local, nxdomain, latUs, latN atomic.Uint64
+		total, forwarded, cached, blocked, refused, failed, local, nxdomain, latUs, latN, coalesced, logDropped atomic.Uint64
 	}
 	ups    upstreams
-	client *dns.Client
-	tcp    *dns.Client
+	flight flight
+
+	sampleSeq atomic.Uint64
+	client    *dns.Client
+	tcp       *dns.Client
 }
 
 // New creates a server with an initial policy.
-func New(p *Policy) *Server {
+// Option configures a Server.
+type Option func(*Server)
+
+// WithCacheSize sets how many answers are cached (default DefaultCacheSize).
+func WithCacheSize(n int) Option { return func(s *Server) { s.cache = newCache(n) } }
+
+func New(p *Policy, opts ...Option) *Server {
 	s := &Server{
-		cache:  newCache(20000),
-		events: make(chan QueryEvent, 4096),
+		cache:  newCache(DefaultCacheSize),
+		events: make(chan QueryEvent, 65536),
 		client: &dns.Client{Net: "udp", Timeout: 2 * time.Second, UDPSize: dns.DefaultMsgSize},
 		tcp:    &dns.Client{Net: "tcp", Timeout: 3 * time.Second},
 	}
+	for _, o := range opts {
+		o(s)
+	}
 	s.SetPolicy(p)
+	go func() {
+		for range time.Tick(30 * time.Second) {
+			s.cache.sweep()
+		}
+	}()
 	return s
 }
+
+// CacheSize returns the number of cached answers.
+func (s *Server) CacheSize() int { return s.cache.size() }
 
 // SetPolicy replaces the active policy. The cache is cleared because block
 // decisions are not cached but sinkhole answers depend on the policy.
@@ -121,7 +148,8 @@ func (s *Server) Stats() Stats {
 		Total: s.stats.total.Load(), Forwarded: s.stats.forwarded.Load(), Cached: s.stats.cached.Load(),
 		Blocked: s.stats.blocked.Load(), Refused: s.stats.refused.Load(), Failed: s.stats.failed.Load(),
 		Local: s.stats.local.Load(), Nxdomain: s.stats.nxdomain.Load(),
-		LatencyUsSum: s.stats.latUs.Load(), LatencyCount: s.stats.latN.Load(),
+		LatencyUsSum: s.stats.latUs.Load(), LatencyCount: s.stats.latN.Load(), Coalesced: s.stats.coalesced.Load(),
+		LogDropped: s.stats.logDropped.Load(),
 	}
 }
 
@@ -153,22 +181,29 @@ func (s *Server) Listen(addrs []string) error {
 func (s *Server) bindLocked(addrs []string) error {
 	var started []*dns.Server
 	for _, addr := range addrs {
-		pc, err := net.ListenPacket("udp", addr)
+		// One UDP socket per CPU (SO_REUSEPORT): the kernel spreads incoming
+		// queries across them, so reading packets is not a single-core job.
+		pcs, err := listenUDP(addr)
 		if err != nil {
 			closeServers(started)
 			return fmt.Errorf("dns udp %s: %w", addr, err)
 		}
 		ln, err := net.Listen("tcp", addr)
 		if err != nil {
-			pc.Close()
+			for _, pc := range pcs {
+				pc.Close()
+			}
 			closeServers(started)
 			return fmt.Errorf("dns tcp %s: %w", addr, err)
 		}
-		u := &dns.Server{PacketConn: pc, Handler: s}
+		for _, pc := range pcs {
+			u := &dns.Server{PacketConn: pc, Handler: s}
+			go func() { _ = u.ActivateAndServe() }()
+			started = append(started, u)
+		}
 		t := &dns.Server{Listener: ln, Handler: s}
-		go func() { _ = u.ActivateAndServe() }()
 		go func() { _ = t.ActivateAndServe() }()
-		started = append(started, u, t)
+		started = append(started, t)
 	}
 	s.servers = started
 	s.addrs = append([]string(nil), addrs...)
@@ -273,12 +308,22 @@ func clientAddr(w dns.ResponseWriter) netip.Addr {
 }
 
 func (s *Server) emit(p *Policy, ev QueryEvent) {
-	if !p.LogQueries {
+	if !p.LogQueries || p.LogMode == "off" {
 		return
+	}
+	important := ev.Action == "blocked" || ev.Action == "refused" || ev.Action == "failed"
+	if !important {
+		if p.LogMode == "important" {
+			return
+		}
+		if p.LogSample > 1 && s.sampleSeq.Add(1)%uint64(p.LogSample) != 0 {
+			return
+		}
 	}
 	select {
 	case s.events <- ev:
 	default:
+		s.stats.logDropped.Add(1) // the log writer cannot keep up
 	}
 }
 
@@ -329,7 +374,10 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 		return
 	}
 	t0 := time.Now()
-	resp, err := s.forward(p, req)
+	resp, err, shared := s.flight.do(cacheKey(req), func() (*dns.Msg, error) { return s.forward(p, req) })
+	if shared {
+		s.stats.coalesced.Add(1)
+	}
 	if err == nil {
 		s.stats.latUs.Add(uint64(time.Since(t0).Microseconds()))
 		s.stats.latN.Add(1)

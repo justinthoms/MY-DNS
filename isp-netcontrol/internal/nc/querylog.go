@@ -11,7 +11,9 @@ import (
 
 // QueryLogSettings controls how long the query log is kept.
 type QueryLogSettings struct {
-	RetentionHours int `json:"retention_hours"`
+	RetentionHours int    `json:"retention_hours"`
+	Mode           string `json:"mode"`   // all | important | off
+	Sample         int    `json:"sample"` // with "all": keep 1 in N allowed queries
 }
 
 const maxRetentionHours = 90 * 24
@@ -23,6 +25,12 @@ func (a *App) queryLogSettings(ctx context.Context) QueryLogSettings {
 	}
 	if s.RetentionHours < 1 || s.RetentionHours > maxRetentionHours {
 		s.RetentionHours = a.cfg.QueryLogDays * 24
+	}
+	if s.Mode == "" {
+		s.Mode = "all"
+	}
+	if s.Sample < 1 {
+		s.Sample = 1
 	}
 	return s
 }
@@ -46,7 +54,22 @@ func (a *App) updateQueryLogSettings(c *fiber.Ctx) error {
 	if s.RetentionHours < 1 || s.RetentionHours > maxRetentionHours {
 		return bad(c, "keep the query log between 1 hour and 90 days")
 	}
+	if s.Mode == "" {
+		s.Mode = "all"
+	}
+	if s.Mode != "all" && s.Mode != "important" && s.Mode != "off" {
+		return bad(c, `mode must be "all", "important" or "off"`)
+	}
+	if s.Sample == 0 {
+		s.Sample = 1
+	}
+	if s.Sample < 1 || s.Sample > 1000 {
+		return bad(c, "sample must be between 1 (every query) and 1000")
+	}
 	if err := a.putSetting(c.UserContext(), "querylog", s); err != nil {
+		return err
+	}
+	if err := a.reloadDNS(c.UserContext()); err != nil {
 		return err
 	}
 	a.pruneQueryLog(c.UserContext()) // apply a shorter retention immediately
@@ -102,6 +125,7 @@ func (a *App) queryLog(c *fiber.Ctx) error {
 		}
 		out = append(out, e)
 	}
+	qs := a.queryLogSettings(ctx)
 	return c.JSON(fiber.Map{"entries": out, "total": total, "page": page, "pages": pages, "page_size": size,
-		"retention_hours": a.queryLogSettings(ctx).RetentionHours})
+		"retention_hours": qs.RetentionHours, "mode": qs.Mode, "sample": qs.Sample, "dropped": a.dns.Stats().LogDropped})
 }

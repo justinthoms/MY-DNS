@@ -142,6 +142,8 @@ func (a *App) buildPolicy(ctx context.Context, st license.State) (*dnsserver.Pol
 	p := &dnsserver.Policy{
 		Filtering:  s.FilteringEnabled && st.Has(licensecore.FeatureDNSFiltering),
 		LogQueries: st.Has(licensecore.FeatureQueryLog),
+		LogMode:    a.queryLogSettings(ctx).Mode,
+		LogSample:  a.queryLogSettings(ctx).Sample,
 		BlockMode:  s.BlockMode, Upstreams: s.Upstreams,
 		SinkholeV4: net.ParseIP(s.SinkholeV4), SinkholeV6: net.ParseIP(s.SinkholeV6),
 		Blocked: map[string]string{}, Allowed: map[string]bool{},

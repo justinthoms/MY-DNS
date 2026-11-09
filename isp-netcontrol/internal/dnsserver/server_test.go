@@ -2,9 +2,12 @@ package dnsserver
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/netip"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -192,5 +195,66 @@ func TestNewCountersAndUpstreamHealth(t *testing.T) {
 	}
 	if blockedEv.Category != "malware" {
 		t.Fatalf("blocked event category %q", blockedEv.Category)
+	}
+}
+
+func TestCoalescesIdenticalQueries(t *testing.T) {
+	var upstreamQueries atomic.Int64
+	pc, _ := net.ListenPacket("udp", "127.0.0.1:0")
+	up := &dns.Server{PacketConn: pc, Handler: dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {
+		upstreamQueries.Add(1)
+		time.Sleep(150 * time.Millisecond) // a slow upstream
+		m := new(dns.Msg)
+		m.SetReply(r)
+		m.Answer = append(m.Answer, &dns.A{Hdr: dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60}, A: net.ParseIP("192.0.2.1")})
+		_ = w.WriteMsg(m)
+	})}
+	go func() { _ = up.ActivateAndServe() }()
+	defer up.Shutdown()
+	s := New(&Policy{Upstreams: []string{pc.LocalAddr().String()}, Allowed: map[string]bool{}, Blocked: map[string]string{},
+		AllowedClients: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}})
+	addr := freeAddr(t)
+	if err := s.Listen([]string{addr}); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Shutdown()
+	var wg sync.WaitGroup
+	var answered atomic.Int64
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			m := new(dns.Msg)
+			m.SetQuestion("burst.example.", dns.TypeA)
+			r, _, err := (&dns.Client{Timeout: 3 * time.Second}).Exchange(m, addr)
+			if err == nil && len(r.Answer) == 1 && r.Id == m.Id {
+				answered.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if answered.Load() != 50 {
+		t.Fatalf("answered %d of 50", answered.Load())
+	}
+	if n := upstreamQueries.Load(); n > 3 {
+		t.Fatalf("upstream got %d queries for one name; want them coalesced", n)
+	}
+	if st := s.Stats(); st.Coalesced == 0 {
+		t.Fatalf("coalesced counter not set: %+v", st)
+	}
+}
+
+func TestCacheEvictionIsBounded(t *testing.T) {
+	c := newCache(640) // 10 per shard
+	for i := 0; i < 5000; i++ {
+		req := new(dns.Msg)
+		req.SetQuestion(fmt.Sprintf("n%d.example.", i), dns.TypeA)
+		resp := new(dns.Msg)
+		resp.SetReply(req)
+		resp.Answer = append(resp.Answer, &dns.A{Hdr: dns.RR_Header{Name: req.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60}, A: net.ParseIP("192.0.2.1")})
+		c.put(req, resp)
+	}
+	if n := c.size(); n > 640 || n < 500 {
+		t.Fatalf("cache size %d, want close to but not above 640", n)
 	}
 }

@@ -531,3 +531,38 @@ func TestIntegrationDashboardData(t *testing.T) {
 		t.Fatalf("host: %v", h["host"])
 	}
 }
+
+func TestIntegrationQueryLogModes(t *testing.T) {
+	e := newTestEnv(t)
+	e.call("POST", "/api/dns/blocklist", map[string]string{"domain": "bad.example"}, 201)
+	e.call("POST", "/api/dns/records", map[string]any{"name": "host.lan", "type": "A", "value": "10.0.0.1"}, 201)
+	count := func(action string) float64 {
+		return e.call("GET", "/api/dns/querylog?action="+action, nil, 200)["total"].(float64)
+	}
+	waitFor := func(action string, want float64) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for count(action) != want {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s entries: %v, want %v", action, count(action), want)
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+	}
+	e.call("PUT", "/api/dns/querylog/settings", map[string]any{"retention_hours": 24, "mode": "important", "sample": 1}, 200)
+	for i := 0; i < 5; i++ {
+		e.query("host.lan", dns.TypeA)
+		e.query("x.bad.example", dns.TypeA)
+	}
+	waitFor("blocked", 5)
+	if n := count("local"); n != 0 {
+		t.Fatalf("important mode logged %v allowed queries", n)
+	}
+	e.call("PUT", "/api/dns/querylog/settings", map[string]any{"retention_hours": 24, "mode": "all", "sample": 10}, 200)
+	for i := 0; i < 200; i++ {
+		e.query("host.lan", dns.TypeA)
+	}
+	waitFor("local", 20)
+	e.call("PUT", "/api/dns/querylog/settings", map[string]any{"retention_hours": 24, "mode": "verbose"}, 400)
+	e.call("PUT", "/api/dns/querylog/settings", map[string]any{"retention_hours": 24, "mode": "all", "sample": 5000}, 400)
+}
