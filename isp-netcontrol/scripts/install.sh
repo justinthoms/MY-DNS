@@ -259,15 +259,16 @@ ln -sf "$DIR/.env" "$DEPLOY/.env"
     echo "      - /dev/null:/host/product_uuid:ro"
   fi
   if [ -n "$LM_CA" ]; then
-    install -m 0644 "$LM_CA" "$DIR/lm-ca.pem"
+    [ "$LM_CA" -ef "$DIR/lm-ca.pem" ] || install -m 0644 "$LM_CA" "$DIR/lm-ca.pem"
     echo "      - $DIR/lm-ca.pem:/etc/isp-netcontrol/lm-ca.pem:ro"
   fi
 } >"$DEPLOY/docker-compose.override.yml"
 
 # ---- TLS --------------------------------------------------------------------
 if [ -n "$TLS_CERT" ]; then
-  install -m 0644 "$TLS_CERT" "$DIR/tls/fullchain.pem"
-  install -m 0600 "$TLS_KEY" "$DIR/tls/privkey.pem"
+  # Re-running with the installed files themselves is fine.
+  [ "$TLS_CERT" -ef "$DIR/tls/fullchain.pem" ] || install -m 0644 "$TLS_CERT" "$DIR/tls/fullchain.pem"
+  [ "$TLS_KEY" -ef "$DIR/tls/privkey.pem" ] || install -m 0600 "$TLS_KEY" "$DIR/tls/privkey.pem"
 elif [ ! -s "$DIR/tls/fullchain.pem" ]; then
   say "Creating a self-signed console certificate for $DOMAIN"
   SAN="DNS:$DOMAIN,DNS:localhost,IP:127.0.0.1"
@@ -294,6 +295,9 @@ say "Building images (this takes a few minutes the first time)"
 docker compose build
 say "Starting services"
 docker compose up -d
+# Nginx renders its configuration from the templates when it starts: restart
+# it so an upgrade's template changes apply (DNS is not affected).
+docker compose restart nginx >/dev/null
 say "Waiting for ISP NetControl to become healthy"
 for _ in $(seq 1 60); do
   if curl -fsk "https://127.0.0.1:$HTTPS_PORT/healthz" >/dev/null 2>&1; then OK=1; break; fi

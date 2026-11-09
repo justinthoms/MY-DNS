@@ -587,6 +587,10 @@ func TestIntegrationQueryLogModes(t *testing.T) {
 func TestIntegrationProtection(t *testing.T) {
 	e := newTestEnv(t)
 	got := e.call("GET", "/api/dns/protection", nil, 200)
+	// A fresh server has empty lists, not null (the console reads .length).
+	if st := got["status"].(map[string]any); st["zones"] == nil || st["limited_clients"] == nil {
+		t.Fatalf("status lists are null: %v", st)
+	}
 	set := got["settings"].(map[string]any)
 	if set["rate_limit"].(float64) != 500 || set["minimal_any"] != true || set["torture_enabled"] != true {
 		t.Fatalf("defaults %v", set)

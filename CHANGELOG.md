@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.4.0 (2026-11-09)
 
 ### New
 - **Built-in recursive resolver**: `install.sh --with-unbound` installs
@@ -29,6 +29,12 @@
   in-flight upstream queries merged into one. Measured on 4 shared cores
   with 200 clients: cached answers 87.7k to 110k queries/s, blocked 92k to
   120k, forwarded 4.2k to 23.5k (median 59 ms to 7 ms).
+
+### Fixed
+- Upgrades now restart Nginx, so changes to its configuration apply.
+- Re-running the installer with `--lm-ca`, `--tls-cert` or `--tls-key`
+  pointing at the already-installed files no longer fails.
+- `install.sh --help` no longer prints part of the script.
 
 ## v1.3.1 (2026-11-09)
 

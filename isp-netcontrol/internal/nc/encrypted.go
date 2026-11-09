@@ -101,7 +101,14 @@ func (c *certStore) info() CertInfo {
 		return CertInfo{Error: msg, Names: []string{}}
 	}
 	l := cert.Leaf
-	names := append([]string{}, l.DNSNames...)
+	names := []string{}
+	seen := map[string]bool{}
+	for _, n := range l.DNSNames {
+		if !seen[n] {
+			seen[n] = true
+			names = append(names, n)
+		}
+	}
 	for _, ip := range l.IPAddresses {
 		names = append(names, ip.String())
 	}

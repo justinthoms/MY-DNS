@@ -140,7 +140,7 @@ type LimitedClient struct {
 }
 
 func (l *limiter) limited(since int64, n int) []LimitedClient {
-	var out []LimitedClient
+	out := []LimitedClient{} // never nil: the console expects a list
 	for i := range l.shards {
 		sh := &l.shards[i]
 		sh.mu.Lock()
@@ -292,7 +292,7 @@ type ZoneAlert struct {
 }
 
 func (g *tortureGuard) alerts(now int64) []ZoneAlert {
-	var out []ZoneAlert
+	out := []ZoneAlert{}
 	for i := range g.shards {
 		sh := &g.shards[i]
 		sh.mu.Lock()

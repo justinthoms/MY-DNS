@@ -15,6 +15,8 @@ type Data = { settings: Settings; status: Status };
 
 const lines = (s: string) => s.split(/[\n,]+/).map((x) => x.trim()).filter(Boolean);
 const n = (v: number) => v.toLocaleString("en-IN");
+// Attacks last minutes: the time of day is enough (hover shows the full date).
+const hms = (s: string) => new Date(s).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
 
 export default function ProtectionPage() {
   const { data, error, reload } = useLoad<Data>("/dns/protection");
@@ -60,9 +62,9 @@ export default function ProtectionPage() {
               <h2>Domains under attack</h2>
               {status.zones.length === 0 ? <p className="muted">None. A domain appears here when it causes an unusual number of NXDOMAIN answers.</p> : (
                 <div className="table-wrap"><table>
-                  <thead><tr><th>Domain</th><th>Since</th><th>Until</th><th style={{ textAlign: "right" }} className="num">Peak NXDOMAIN/min</th><th style={{ textAlign: "right" }} className="num">Refused</th></tr></thead>
+                  <thead><tr><th>Domain</th><th>Since</th><th>Until</th><th style={{ textAlign: "right" }} className="num">Peak NX/min</th><th style={{ textAlign: "right" }} className="num">Refused</th></tr></thead>
                   <tbody>{status.zones.map((z) => (
-                    <tr key={z.zone}><td className="mono">{z.zone}</td><td>{fmtTime(z.since)}</td><td>{fmtTime(z.until)}</td><td style={{ textAlign: "right" }} className="num">{n(z.peak_nxdomain_per_minute)}</td><td style={{ textAlign: "right" }} className="num">{n(z.throttled)}</td></tr>
+                    <tr key={z.zone}><td className="mono" style={{ whiteSpace: "nowrap" }}>{z.zone}</td><td style={{ whiteSpace: "nowrap" }} title={fmtTime(z.since)}>{hms(z.since)}</td><td style={{ whiteSpace: "nowrap" }} title={fmtTime(z.until)}>{hms(z.until)}</td><td style={{ textAlign: "right" }} className="num">{n(z.peak_nxdomain_per_minute)}</td><td style={{ textAlign: "right" }} className="num">{n(z.throttled)}</td></tr>
                   ))}</tbody>
                 </table></div>
               )}
@@ -73,7 +75,7 @@ export default function ProtectionPage() {
                 <div className="table-wrap"><table>
                   <thead><tr><th>Client</th><th style={{ textAlign: "right" }} className="num">Dropped</th><th>Last</th></tr></thead>
                   <tbody>{status.limited_clients.map((c) => (
-                    <tr key={c.client}><td className="mono"><a href={`/querylog?q=${encodeURIComponent(c.client)}`}>{c.client}</a></td><td style={{ textAlign: "right" }} className="num">{n(c.dropped)}</td><td>{fmtTime(c.last_drop)}</td></tr>
+                    <tr key={c.client}><td className="mono"><a href={`/querylog?q=${encodeURIComponent(c.client)}`}>{c.client}</a></td><td style={{ textAlign: "right" }} className="num">{n(c.dropped)}</td><td style={{ whiteSpace: "nowrap" }}>{fmtTime(c.last_drop)}</td></tr>
                   ))}</tbody>
                 </table></div>
               )}

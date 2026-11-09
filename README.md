@@ -7,6 +7,14 @@ Internet service providers:
   as text, hosts file or CSV), block-list subscriptions from a URL refreshed
   daily, sinkhole or NXDOMAIN answers, caching and a query log. Only
   configured client networks are answered, so it is never an open resolver.
+- Fast: sharded cache, one UDP socket per CPU and merged identical
+  upstream queries (110,000 cached answers per second on 4 shared cores).
+- Optional built-in **Unbound** recursive resolver with DNSSEC validation
+  (`install.sh --with-unbound`), so no dependency on public resolvers.
+- **Attack protection**: per-client rate limiting, minimal ANY answers and
+  detection of random-subdomain ("water torture") attacks.
+- **Encrypted DNS**: DNS over TLS and DNS over HTTPS for subscribers, and
+  DNS over TLS to upstream resolvers.
 - Local DNS records (A, AAAA, CNAME, TXT, MX, PTR, wildcards) for internal
   hosts, overrides and reverse lookups.
 - A NOC dashboard: query rate, result distribution, response time, query
@@ -105,10 +113,17 @@ actually applied to the kernel (only the `inet isp_netcontrol` table).
 ![Firewall](docs/screenshots/06-firewall.png)
 
 ### DNS settings
-Upstream resolvers, allowed client networks (no open resolver) and how
-blocked names are answered.
+Listen addresses, upstream resolvers (plain, Unbound or DNS over TLS),
+allowed client networks (no open resolver), how blocked names are answered,
+and DNS over TLS / DNS over HTTPS for subscribers.
 
 ![DNS settings](docs/screenshots/07-dns-settings.png)
+
+### Attack protection
+Domains under random-subdomain attack, rate-limited clients and the
+settings for each defence.
+
+![Attack protection](docs/screenshots/16-protection.png)
 
 ### License
 License status, hardware ID, online and offline activation, and status sync.
