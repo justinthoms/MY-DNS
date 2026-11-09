@@ -11,6 +11,11 @@ Internet service providers:
   hosts, overrides and reverse lookups.
 - A dashboard with a queries-over-time graph (total, blocked, refused,
   failed) for 1 hour to 30 days, and the top blocked domains and clients.
+- Choose which interfaces and IP addresses DNS listens on, applied live.
+- Anycast support: health checks withdraw this server's anycast routes
+  (iBGP, OSPF, IS-IS via FRR) when DNS fails, and announce them on recovery.
+- Several administrators, and a recovery command for lost passwords or
+  authenticators.
 - Firewall management through its own nftables table (`inet isp_netcontrol`);
   the server's existing firewall rules are never changed.
 - A web console with mandatory two-factor authentication, CSRF protection,
@@ -58,10 +63,32 @@ Local A, AAAA, CNAME, TXT, MX and PTR records, answered before filtering.
 ![DNS records](docs/screenshots/10-dns-records.png)
 
 ### Query log
-Every query with its client, type and result (forwarded, cached, local,
-blocked, refused, failed), with CSV export.
+Every query with its client, type and result, in pages of 25 to 200 rows,
+with tabs for blocked, refused and failed queries, CSV export, and a
+retention setting (for example 12 hours) after which entries are deleted.
 
 ![Query log](docs/screenshots/05-query-log.png)
+
+### Listen on
+Serve DNS on all addresses, or only on chosen interfaces (e.g. `ens33`,
+`anycast0`) or single IPs. Applied live; new addresses on a chosen
+interface are picked up within a minute.
+
+![Listen on](docs/screenshots/13-listen.png)
+
+### Anycast
+Health-based route control for anycast DNS with FRR. When DNS fails a
+number of checks in a row, the anycast interface is taken down so FRR
+withdraws the routes; it comes back up when DNS recovers. Maintenance
+mode, force announce and a monitor-only mode. See [docs/ANYCAST.md](docs/ANYCAST.md).
+
+![Anycast](docs/screenshots/14-anycast.png)
+
+### Administrators
+Each NOC engineer gets their own account with mandatory two-factor
+authentication.
+
+![Administrators](docs/screenshots/15-admins.png)
 
 ### Firewall
 Networks blocked by source, destination or both, and the nftables ruleset
@@ -96,6 +123,7 @@ Every sign-in and administrative change.
 - [Installation](docs/INSTALL.md)
 - [How licensing works and its limits](docs/LICENSING.md)
 - [Operations: backups, upgrades, troubleshooting](docs/OPERATIONS.md)
+- [Anycast with FRR (iBGP, OSPF, IS-IS)](docs/ANYCAST.md)
 - [Architecture and security design](docs/ARCHITECTURE.md)
 - [Changelog](CHANGELOG.md)
 

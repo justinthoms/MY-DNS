@@ -466,3 +466,11 @@ func TestIntegrationAdminsAndRecovery(t *testing.T) {
 func authkitResetPassword(ctx context.Context, e *testEnv, email string) (string, error) {
 	return authkit.ResetPassword(ctx, e.app.db, email)
 }
+
+func TestIntegrationListenDefaultsAreLists(t *testing.T) {
+	e := newTestEnv(t)
+	raw := string(e.raw("GET", "/api/dns/listen", nil, 200))
+	if !strings.Contains(raw, `"interfaces":[]`) || !strings.Contains(raw, `"addresses":[]`) || strings.Contains(raw, `"interfaces":null`) {
+		t.Fatalf("unsaved listen settings must use empty lists: %s", raw[:200])
+	}
+}

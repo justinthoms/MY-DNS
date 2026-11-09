@@ -65,6 +65,42 @@ Query counters are stored per minute in the database and kept for 30 days,
 so the dashboard graph survives restarts. The top lists come from the query
 log (7 days by default, `NC_QUERY_LOG_DAYS`) and need the query-log feature.
 
+## Administrators and recovery
+
+Add NOC staff under **Administrators**. If someone is locked out or has lost
+their authenticator, run on the server:
+
+```bash
+sudo docker compose -f /opt/isp-netcontrol/src/isp-netcontrol/deploy/docker-compose.yml exec api isp-netcontrol admin list
+```
+
+```bash
+sudo docker compose -f /opt/isp-netcontrol/src/isp-netcontrol/deploy/docker-compose.yml exec api isp-netcontrol admin reset-password noc@your-isp.example
+```
+
+`reset-password` prints a temporary password that must be changed at the
+next sign-in; `reset-2fa` removes two-factor authentication so it is set up
+again. Both end the user's sessions and are recorded in the audit log.
+
+## Query log retention
+
+**Query log → Keep queries for** sets how long queries are kept (1 hour to
+90 days). Older entries are deleted every 10 minutes. On a busy resolver a
+short retention such as 12 hours keeps the database small.
+
+## Listen addresses
+
+**DNS settings → Listen on** chooses all addresses or specific interfaces
+and IPs. A change is applied immediately; if an address cannot be used the
+previous addresses stay active. If a chosen address disappears while the
+server is stopped, it starts on `NC_DNS_LISTEN` from the installer instead,
+so DNS keeps answering.
+
+## Anycast
+
+See [ANYCAST.md](ANYCAST.md). Before maintenance on an anycast server, set
+**Anycast → Maintenance (withdraw)**, and set it back to **Auto** afterwards.
+
 ## Logs and health
 
 ```bash

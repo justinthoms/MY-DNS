@@ -17,7 +17,9 @@ export default function ListenPanel() {
   const act = useAction();
   const [s, setS] = useState<Settings | null>(null);
   const [showInternal, setShowInternal] = useState(false);
-  useEffect(() => { if (data) setS(data.settings); }, [data]);
+  useEffect(() => {
+    if (data) setS({ ...data.settings, interfaces: data.settings.interfaces ?? [], addresses: data.settings.addresses ?? [] });
+  }, [data]);
   if (!data || !s) return <div className="panel"><h2>Listen on</h2><Alert kind="error">{error}</Alert></div>;
 
   const toggleIface = (n: string) => setS({ ...s, interfaces: s.interfaces.includes(n) ? s.interfaces.filter((x) => x !== n) : [...s.interfaces, n] });

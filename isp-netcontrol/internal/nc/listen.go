@@ -160,6 +160,12 @@ func (a *App) getListen(c *fiber.Ctx) error {
 	if !saved {
 		s = ListenSettings{Mode: "all", Port: 53}
 	}
+	if s.Interfaces == nil {
+		s.Interfaces = []string{}
+	}
+	if s.Addresses == nil {
+		s.Addresses = []string{}
+	}
 	return c.JSON(fiber.Map{"settings": s, "saved": saved, "active": a.dns.Addrs(), "env_default": a.cfg.DNSListen, "interfaces": ifs})
 }
 

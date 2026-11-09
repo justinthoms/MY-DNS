@@ -1,5 +1,27 @@
 # Changelog
 
+## v1.2.0 (2026-11-09)
+
+### New
+- **Anycast health control** for iBGP, OSPF and IS-IS (via FRR): the
+  anycast interface is taken down after repeated failed DNS health checks
+  (routes withdrawn) and brought up after recovery. Auto, maintenance and
+  force-announce modes, monitor-only mode, safety guards (never the
+  default-route interface), withdrawal on clean shutdown, events in the
+  console and audit log. Guide: docs/ANYCAST.md.
+- **Choose DNS listen interfaces and addresses** in DNS settings, applied
+  live with rollback; new addresses on chosen interfaces are picked up.
+- **Query log paging** (25-200 rows, page numbers) with result tabs
+  (Blocked, Refused, Failed, ...); dashboard top lists link to the queries.
+- **Query log retention** set in the console (1 hour to 90 days).
+- **Administrators page** and `isp-netcontrol admin list | reset-password |
+  reset-2fa` for recovery.
+
+### Fixed
+- The DNS server now always releases sockets when a rebind partly fails.
+- The installer restarts Docker after freeing port 53 (v1.1.x installs
+  could fail with "lookup registry-1.docker.io on 127.0.0.53:53").
+
 ## v1.1.0 (2026-11-08)
 
 ### New
