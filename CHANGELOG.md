@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.4.2 (2026-11-09)
+
+### Fixed
+- `--with-unbound` failed with "interface: 127.0.0.1 present twice" on
+  servers that already had an Unbound configuration: v1.4.0 added its
+  settings to the system Unbound's `conf.d`. ISP NetControl now runs its own
+  Unbound instance (`isp-netcontrol-unbound` service,
+  `/etc/isp-netcontrol/unbound.conf`, own DNSSEC trust anchor) and never
+  changes the system Unbound. Upgrading removes the v1.4.0 file again.
+- When the installer installs the unbound package itself, the package's own
+  service (which would take port 53) is kept from starting.
+
 ## v1.4.1 (2026-11-09)
 
 ### Fixed

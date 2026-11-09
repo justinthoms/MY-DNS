@@ -103,11 +103,14 @@ existing installation the saved upstreams are kept: set **DNS settings →
 Upstream resolvers** to `127.0.0.1:5335` to switch. Keep a public resolver
 as a second upstream if you want a fallback.
 
-The configuration is `/etc/unbound/unbound.conf.d/isp-netcontrol.conf`;
-re-running the installer rewrites it. Check Unbound:
+It is ISP NetControl's own Unbound instance (service
+`isp-netcontrol-unbound`, configuration `/etc/isp-netcontrol/unbound.conf`),
+separate from any Unbound the server already runs: an existing
+`/etc/unbound` configuration is never changed. Re-running the installer
+rewrites the configuration. Check it:
 
 ```bash
-systemctl status unbound
+systemctl status isp-netcontrol-unbound
 ```
 
 ```bash
@@ -223,7 +226,8 @@ installer with `--lm-ca <its CA certificate>`.
 Their address is not in **DNS settings → Allowed client networks**.
 
 **DNS: SERVFAIL for every name with Unbound**
-Check `systemctl status unbound` and that the server can reach the
+Check `systemctl status isp-netcontrol-unbound` (and
+`journalctl -u isp-netcontrol-unbound`) and that the server can reach the
 internet on UDP and TCP port 53 (`dig @198.41.0.4 . NS`). A wrong system
 clock also breaks DNSSEC validation: check `timedatectl`.
 

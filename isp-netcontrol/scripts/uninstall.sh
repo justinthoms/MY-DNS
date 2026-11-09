@@ -26,13 +26,22 @@ if [ -f /etc/systemd/resolved.conf.d/isp-netcontrol.conf ]; then
   echo "Restored systemd-resolved's stub listener."
 fi
 rm -f /etc/cron.d/isp-netcontrol-backup
-if [ -f /etc/unbound/unbound.conf.d/isp-netcontrol.conf ]; then
-  # Unbound was installed with --with-unbound: stop it and remove our configuration
-  # (the package stays; remove it with: apt purge unbound).
-  rm -f /etc/unbound/unbound.conf.d/isp-netcontrol.conf
-  systemctl disable --now unbound >/dev/null 2>&1 || pkill -x unbound 2>/dev/null || true
-  echo "Unbound stopped and its ISP NetControl configuration removed."
+# ISP NetControl's own Unbound instance (--with-unbound). A system Unbound
+# configuration of the administrator is not touched.
+if [ -f /etc/isp-netcontrol/unbound.conf ] || [ -f /etc/systemd/system/isp-netcontrol-unbound.service ]; then
+  systemctl disable --now isp-netcontrol-unbound.service >/dev/null 2>&1 || pkill -f "unbound -c /etc/isp-netcontrol/unbound.conf" 2>/dev/null || true
+  rm -f /etc/systemd/system/isp-netcontrol-unbound.service /etc/isp-netcontrol/unbound.conf /var/lib/unbound/isp-netcontrol-root.key
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  if [ -f /etc/isp-netcontrol/unbound-was-ours ]; then
+    # The unbound package was installed only for ISP NetControl.
+    systemctl unmask unbound.service unbound-resolvconf.service >/dev/null 2>&1 || true
+    rm -f /etc/isp-netcontrol/unbound-was-ours
+    echo "Unbound stopped. The package stays installed; remove it with: sudo apt purge unbound"
+  fi
+  rmdir /etc/isp-netcontrol 2>/dev/null || true
 fi
+# Settings left by v1.4.0 in the system Unbound.
+rm -f /etc/unbound/unbound.conf.d/isp-netcontrol.conf
 if [ "$PURGE" -eq 1 ]; then
   rm -rf -- "$STATE_DIR"
   case "$DIR" in /opt/*) rm -rf -- "$DIR" ;; *) echo "not deleting $DIR automatically (outside /opt); remove it yourself" ;; esac

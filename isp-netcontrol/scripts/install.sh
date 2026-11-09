@@ -128,23 +128,77 @@ $OTHER
 fi
 
 # ---- Unbound (optional recursive resolver) --------------------------------
-UNBOUND_CONF=/etc/unbound/unbound.conf.d/isp-netcontrol.conf
+# ISP NetControl runs its own Unbound instance (own configuration, systemd
+# unit and trust anchor) on 127.0.0.1:5335. It never merges with or changes
+# a system Unbound configuration that may already exist on the server.
+UNBOUND_DIR=/etc/isp-netcontrol
+UNBOUND_CONF="$UNBOUND_DIR/unbound.conf"
+UNBOUND_UNIT=isp-netcontrol-unbound.service
+UNBOUND_KEY=/var/lib/unbound/isp-netcontrol-root.key
+OLD_UNBOUND_CONF=/etc/unbound/unbound.conf.d/isp-netcontrol.conf
+have_systemd() { [ -d /run/systemd/system ]; }
+# True when the system Unbound has a configuration of its own (beyond
+# Ubuntu's defaults), i.e. the administrator uses it for something.
+system_unbound_customised() {
+  grep -hvE '^[[:space:]]*(#|$)|include' /etc/unbound/unbound.conf 2>/dev/null | grep -q . && return 0
+  ls /etc/unbound/unbound.conf.d/*.conf 2>/dev/null | grep -qv -e /remote-control.conf -e /root-auto-trust-anchor-file.conf
+}
+
+# v1.4.0 put its settings into the system Unbound's conf.d; take them out
+# again, so the system configuration is exactly as it was before.
+if [ -f "$OLD_UNBOUND_CONF" ]; then
+  say "Removing the v1.4.0 Unbound settings from /etc/unbound/unbound.conf.d"
+  rm -f "$OLD_UNBOUND_CONF"
+  if ! system_unbound_customised; then
+    # The system Unbound only existed for ISP NetControl: stop it (port 53 stays free).
+    if have_systemd; then systemctl disable --now unbound >/dev/null 2>&1 || true; else pkill -f "unbound -c /etc/unbound/unbound.conf" 2>/dev/null || true; fi
+  elif have_systemd; then
+    systemctl try-restart unbound >/dev/null 2>&1 || true
+  fi
+fi
+
 if [ "$WITH_UNBOUND" -eq 1 ]; then
-  say "Setting up Unbound on 127.0.0.1:5335"
+  say "Setting up Unbound for ISP NetControl on 127.0.0.1:5335"
+  if ! command -v unbound >/dev/null; then
+    # Installed only for ISP NetControl: keep the package's own service (which
+    # would listen on port 53) from starting, now and at boot.
+    install -d "$UNBOUND_DIR"
+    touch "$UNBOUND_DIR/unbound-was-ours"
+    have_systemd && systemctl mask unbound.service >/dev/null 2>&1 || true
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -q
+    apt-get install -y -q unbound
+    have_systemd && systemctl mask --now unbound.service unbound-resolvconf.service >/dev/null 2>&1 || true
+  fi
   CPUS="$(nproc)"; THREADS=$(( CPUS > 8 ? 8 : CPUS ))
   SLABS=1; while [ "$SLABS" -lt "$THREADS" ]; do SLABS=$(( SLABS * 2 )); done
   MEM_MB="$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)"
   MSG_MB=$(( MEM_MB / 16 )); [ "$MSG_MB" -lt 64 ] && MSG_MB=64; [ "$MSG_MB" -gt 1024 ] && MSG_MB=1024
   RRSET_MB=$(( MSG_MB * 2 ))
-  # Written before the package is installed, so Unbound never starts on port 53.
-  install -d /etc/unbound/unbound.conf.d
+  install -d "$UNBOUND_DIR"
+  install -d -o unbound -g unbound /var/lib/unbound
+  # DNSSEC trust anchor, kept up to date by Unbound itself (RFC 5011).
+  if [ ! -s "$UNBOUND_KEY" ]; then
+    if [ -s /usr/share/dns/root.key ]; then
+      install -o unbound -g unbound -m 0644 /usr/share/dns/root.key "$UNBOUND_KEY"
+    else
+      unbound-anchor -a "$UNBOUND_KEY" || true
+      chown unbound:unbound "$UNBOUND_KEY" 2>/dev/null || true
+    fi
+  fi
   cat >"$UNBOUND_CONF" <<UBCONF
-# Written by the ISP NetControl installer: recursive resolver for ISP NetControl.
+# Written by the ISP NetControl installer: ISP NetControl's own recursive
+# resolver (service $UNBOUND_UNIT). Separate from any system Unbound.
 # Sized for $CPUS CPU(s) and $MEM_MB MB RAM. Re-run the installer to regenerate.
 server:
-    interface: 127.0.0.1
-    port: 5335
+    interface: 127.0.0.1@5335
     access-control: 127.0.0.0/8 allow
+    username: "unbound"
+    directory: "/var/lib/unbound"
+    chroot: ""
+    pidfile: ""
+    use-syslog: yes
+    auto-trust-anchor-file: "$UNBOUND_KEY"
     num-threads: $THREADS
     msg-cache-slabs: $SLABS
     rrset-cache-slabs: $SLABS
@@ -168,37 +222,39 @@ server:
     hide-identity: yes
     hide-version: yes
     verbosity: 0
+remote-control:
+    control-enable: no
 UBCONF
-  if ! command -v unbound >/dev/null; then
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update -q
-    apt-get install -y -q unbound
-  fi
-  # Ubuntu's helper that points /etc/resolv.conf at Unbound is not wanted.
-  systemctl disable --now unbound-resolvconf.service >/dev/null 2>&1 || true
-  # DNSSEC trust anchor: Ubuntu creates it on the first systemd start; seed it now
-  # so the configuration check (and starts without systemd) work.
-  if [ ! -s /var/lib/unbound/root.key ]; then
-    install -d -o unbound -g unbound /var/lib/unbound
-    if [ -s /usr/share/dns/root.key ]; then
-      install -o unbound -g unbound -m 0644 /usr/share/dns/root.key /var/lib/unbound/root.key
-    else
-      unbound-anchor -a /var/lib/unbound/root.key || true
-      chown unbound:unbound /var/lib/unbound/root.key 2>/dev/null || true
-    fi
-  fi
-  unbound-checkconf >/dev/null || die "Unbound configuration check failed: run unbound-checkconf"
-  if [ -d /run/systemd/system ]; then
-    systemctl enable unbound >/dev/null 2>&1 || true
-    systemctl restart unbound
+  unbound-checkconf "$UNBOUND_CONF" >/dev/null || die "Unbound configuration check failed: run unbound-checkconf $UNBOUND_CONF"
+  if have_systemd; then
+    cat >/etc/systemd/system/$UNBOUND_UNIT <<UNIT
+[Unit]
+Description=Unbound recursive resolver for ISP NetControl (127.0.0.1:5335)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStartPre=/usr/sbin/unbound-checkconf $UNBOUND_CONF
+ExecStart=/usr/sbin/unbound -d -p -c $UNBOUND_CONF
+ExecReload=/bin/kill -HUP \$MAINPID
+Restart=always
+RestartSec=3
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    systemctl daemon-reload
+    systemctl enable "$UNBOUND_UNIT" >/dev/null 2>&1
+    systemctl restart "$UNBOUND_UNIT"
   else
-    pkill -x unbound 2>/dev/null || true
+    pkill -f "unbound -c $UNBOUND_CONF" 2>/dev/null || true
     sleep 1
-    unbound -c /etc/unbound/unbound.conf
+    unbound -c "$UNBOUND_CONF"
     echo "warning: no systemd: Unbound will not start automatically at boot"
   fi
   for _ in $(seq 1 20); do ss -lunH 'sport = :5335' 2>/dev/null | grep -q 127.0.0.1 && break; sleep 1; done
-  ss -lunH 'sport = :5335' 2>/dev/null | grep -q 127.0.0.1 || die "Unbound did not start on 127.0.0.1:5335 (see: journalctl -u unbound)"
+  ss -lunH 'sport = :5335' 2>/dev/null | grep -q 127.0.0.1 || die "Unbound did not start on 127.0.0.1:5335 (see: journalctl -u $UNBOUND_UNIT)"
   say "Unbound is running ($THREADS threads, ${MSG_MB}m + ${RRSET_MB}m cache, DNSSEC validation)"
 fi
 
