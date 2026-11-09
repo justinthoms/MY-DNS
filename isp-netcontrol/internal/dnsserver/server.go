@@ -6,6 +6,7 @@ package dnsserver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"net/netip"
@@ -69,7 +70,9 @@ type Server struct {
 	policy  atomic.Pointer[Policy]
 	cache   *cache
 	events  chan QueryEvent
+	lmu     sync.Mutex // guards servers and addrs
 	servers []*dns.Server
+	addrs   []string
 	stats   struct{ total, forwarded, cached, blocked, refused, failed, local atomic.Uint64 }
 	client  *dns.Client
 	tcp     *dns.Client
@@ -109,49 +112,98 @@ func (s *Server) Stats() Stats {
 	}
 }
 
-// ListenAndServe starts UDP and TCP listeners on each address and blocks
-// until ctx is cancelled. It returns an error if any listener fails to start.
-func (s *Server) ListenAndServe(ctx context.Context, addrs []string) error {
-	errc := make(chan error, len(addrs)*2)
-	var started sync.WaitGroup
-	for _, addr := range addrs {
-		for _, network := range []string{"udp", "tcp"} {
-			srv := &dns.Server{Addr: addr, Net: network, Handler: s, ReusePort: false}
-			started.Add(1)
-			var once sync.Once
-			srv.NotifyStartedFunc = func() { once.Do(started.Done) }
-			s.servers = append(s.servers, srv)
-			go func() {
-				if err := srv.ListenAndServe(); err != nil {
-					once.Do(started.Done)
-					errc <- errors.New("dns " + srv.Net + " " + srv.Addr + ": " + err.Error())
-				}
-			}()
-		}
+// Listen (re)binds the resolver to addrs ("host:port"; ":53" means every
+// address). Sockets are opened synchronously, so a bad address is reported
+// at once. If any address fails, the previous listeners are restored and
+// the error is returned.
+func (s *Server) Listen(addrs []string) error {
+	s.lmu.Lock()
+	defer s.lmu.Unlock()
+	if len(addrs) == 0 {
+		return errors.New("no listen addresses")
 	}
-	started.Wait()
-	select {
-	case err := <-errc:
-		s.Shutdown()
+	old := s.addrs
+	s.stopLocked()
+	if err := s.bindLocked(addrs); err != nil {
+		s.stopLocked()
+		if len(old) > 0 {
+			if rerr := s.bindLocked(old); rerr != nil {
+				log.Printf("dns: could not restore previous listeners %v: %v", old, rerr)
+			}
+		}
 		return err
-	default:
 	}
 	log.Printf("dns: listening on %s (udp+tcp)", strings.Join(addrs, ", "))
-	select {
-	case <-ctx.Done():
-		s.Shutdown()
-		return nil
-	case err := <-errc:
-		s.Shutdown()
+	return nil
+}
+
+func (s *Server) bindLocked(addrs []string) error {
+	var started []*dns.Server
+	for _, addr := range addrs {
+		pc, err := net.ListenPacket("udp", addr)
+		if err != nil {
+			closeServers(started)
+			return fmt.Errorf("dns udp %s: %w", addr, err)
+		}
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			pc.Close()
+			closeServers(started)
+			return fmt.Errorf("dns tcp %s: %w", addr, err)
+		}
+		u := &dns.Server{PacketConn: pc, Handler: s}
+		t := &dns.Server{Listener: ln, Handler: s}
+		go func() { _ = u.ActivateAndServe() }()
+		go func() { _ = t.ActivateAndServe() }()
+		started = append(started, u, t)
+	}
+	s.servers = started
+	s.addrs = append([]string(nil), addrs...)
+	return nil
+}
+
+func (s *Server) stopLocked() {
+	closeServers(s.servers)
+	s.servers, s.addrs = nil, nil
+}
+
+// closeServers stops servers and always closes their sockets: Shutdown
+// alone does nothing for a server whose serve loop has not started yet,
+// which would leave the port bound.
+func closeServers(list []*dns.Server) {
+	for _, srv := range list {
+		_ = srv.Shutdown()
+		if srv.PacketConn != nil {
+			_ = srv.PacketConn.Close()
+		}
+		if srv.Listener != nil {
+			_ = srv.Listener.Close()
+		}
+	}
+}
+
+// Addrs returns the addresses currently listened on.
+func (s *Server) Addrs() []string {
+	s.lmu.Lock()
+	defer s.lmu.Unlock()
+	return append([]string(nil), s.addrs...)
+}
+
+// ListenAndServe listens on addrs until ctx is cancelled.
+func (s *Server) ListenAndServe(ctx context.Context, addrs []string) error {
+	if err := s.Listen(addrs); err != nil {
 		return err
 	}
+	<-ctx.Done()
+	s.Shutdown()
+	return nil
 }
 
 // Shutdown stops all listeners.
 func (s *Server) Shutdown() {
-	for _, srv := range s.servers {
-		_ = srv.Shutdown()
-	}
+	s.lmu.Lock()
+	defer s.lmu.Unlock()
+	s.stopLocked()
 }
 
 // Decide returns the filtering decision for a name: "allowed", "blocked" or

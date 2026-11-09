@@ -198,8 +198,10 @@ func (a *App) Run(ctx context.Context) error {
 	defer cancel()
 	a.applyEnforcement(ctx, a.lic.Current())
 
-	errc := make(chan error, 2)
-	go func() { errc <- a.dns.ListenAndServe(ctx, a.cfg.DNSListen) }()
+	if err := a.startDNS(ctx); err != nil {
+		return err
+	}
+	errc := make(chan error, 1)
 	go func() {
 		log.Printf("console API listening on %s", a.cfg.HTTPAddr)
 		errc <- a.web.Listen(a.cfg.HTTPAddr)
@@ -212,6 +214,7 @@ func (a *App) Run(ctx context.Context) error {
 	go a.queryLogWriter(ctx)
 	go a.statsWriter(ctx)
 	go a.sourceRefresher(ctx)
+	go a.listenWatcher(ctx)
 
 	select {
 	case <-ctx.Done():
@@ -276,6 +279,8 @@ func (a *App) routes() *fiber.App {
 	p.Put("/license/settings", a.updateLicenseSettings)
 
 	p.Get("/dns/settings", a.getDNSSettings)
+	p.Get("/dns/listen", a.getListen)
+	p.Put("/dns/listen", a.updateListen)
 	p.Put("/dns/settings", a.updateDNSSettings)
 	p.Get("/dns/stats", a.dnsStats)
 	p.Get("/dns/timeseries", a.timeseries)
@@ -302,6 +307,8 @@ func (a *App) routes() *fiber.App {
 	dnsF.Post("/sources/:id/refresh", a.refreshSourceNow)
 	dnsF.Get("/check", a.checkDomain)
 	p.Get("/dns/querylog", a.requireFeature("query-log"), a.queryLog)
+	p.Get("/dns/querylog/settings", a.getQueryLogSettings)
+	p.Put("/dns/querylog/settings", a.updateQueryLogSettings)
 	p.Get("/dns/querylog/export", a.requireFeature("query-log"), a.exportQueryLog)
 	p.Get("/dns/top", a.requireFeature("query-log"), a.top)
 

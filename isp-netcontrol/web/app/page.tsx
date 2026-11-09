@@ -21,16 +21,18 @@ const RANGES: [string, string][] = [["1h", "1 hour"], ["24h", "24 hours"], ["7d"
 const domains = (n: number) => `${n.toLocaleString()} ${n === 1 ? "domain" : "domains"}`;
 const pct = (part: number, whole: number) => (whole > 0 ? `${((part / whole) * 100).toFixed(1)}% of queries` : "—");
 
-function Ranked({ items, empty }: { items: TopItem[]; empty: string }) {
+function Ranked({ items, empty, link }: { items: TopItem[]; empty: string; link: (key: string) => string }) {
   if (items.length === 0) return <p className="muted" style={{ margin: 0 }}>{empty}</p>;
   const max = items[0].count;
   return (
     <ol className="rank">
       {items.map((it) => (
         <li key={it.key}>
-          <span className="name" title={it.key}>{it.key}</span>
-          <span className="count">{it.count.toLocaleString()}</span>
-          <span className="track"><span className="fill" style={{ width: `${Math.max(2, (it.count / max) * 100)}%`, display: "block" }} /></span>
+          <Link href={link(it.key)} className="rank-link" style={{ display: "contents" }}>
+            <span className="name" title={`Show queries for ${it.key}`}>{it.key}</span>
+            <span className="count">{it.count.toLocaleString()}</span>
+            <span className="track"><span className="fill" style={{ width: `${Math.max(2, (it.count / max) * 100)}%`, display: "block" }} /></span>
+          </Link>
         </li>
       ))}
     </ol>
@@ -100,12 +102,15 @@ export default function Dashboard() {
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
           <div className="panel" style={{ marginBottom: 0 }}>
-            <h2>Top blocked domains</h2>
-            {top ? <Ranked items={top.blocked_domains} empty="Nothing blocked in this period." /> : <p className="muted" style={{ margin: 0 }}>{topNote || "Loading…"}</p>}
+            <div className="row" style={{ justifyContent: "space-between", marginBottom: 12 }}>
+              <h2 style={{ margin: 0 }}>Top blocked domains</h2>
+              <Link href="/querylog?action=blocked" style={{ fontSize: 13 }}>All blocked queries ›</Link>
+            </div>
+            {top ? <Ranked items={top.blocked_domains} empty="Nothing blocked in this period." link={(k) => `/querylog?action=blocked&q=${encodeURIComponent(k)}`} /> : <p className="muted" style={{ margin: 0 }}>{topNote || "Loading…"}</p>}
           </div>
           <div className="panel" style={{ marginBottom: 0 }}>
             <h2>Top clients</h2>
-            {top ? <Ranked items={top.clients} empty="No queries in this period." /> : <p className="muted" style={{ margin: 0 }}>{topNote || "Loading…"}</p>}
+            {top ? <Ranked items={top.clients} empty="No queries in this period." link={(k) => `/querylog?q=${encodeURIComponent(k)}`} /> : <p className="muted" style={{ margin: 0 }}>{topNote || "Loading…"}</p>}
           </div>
         </div>
       </div>

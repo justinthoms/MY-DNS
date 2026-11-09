@@ -311,3 +311,76 @@ func TestIntegrationStatsAndTop(t *testing.T) {
 		t.Fatalf("query log export:\n%s", logCSV)
 	}
 }
+
+func TestIntegrationListenInterfaces(t *testing.T) {
+	e := newTestEnv(t)
+	r := e.call("GET", "/api/dns/listen", nil, 200)
+	found := false
+	for _, it := range r["interfaces"].([]any) {
+		m := it.(map[string]any)
+		if m["name"] == "lo" && m["loopback"] == true {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("lo not listed: %v", r["interfaces"])
+	}
+	l, _ := net.ListenPacket("udp", "127.0.0.1:0")
+	port := l.LocalAddr().(*net.UDPAddr).Port
+	l.Close()
+	r = e.call("PUT", "/api/dns/listen", map[string]any{"mode": "selected", "interfaces": []string{"lo"}, "port": port}, 200)
+	active := fmt.Sprint(r["active"])
+	if !strings.Contains(active, fmt.Sprintf("127.0.0.1:%d", port)) {
+		t.Fatalf("active after selecting lo: %s", active)
+	}
+	e.dns = fmt.Sprintf("127.0.0.1:%d", port)
+	if m := e.query("example.org", dns.TypeA); m.Rcode == dns.RcodeRefused {
+		t.Fatal("not answering on the new address")
+	}
+	// A foreign address is refused and the previous listeners stay.
+	e.call("PUT", "/api/dns/listen", map[string]any{"mode": "selected", "addresses": []string{"192.0.2.1"}, "port": port}, 400)
+	if got := fmt.Sprint(e.app.dns.Addrs()); got != active {
+		t.Fatalf("listeners changed after a failed update: %s vs %s", got, active)
+	}
+	e.call("PUT", "/api/dns/listen", map[string]any{"mode": "selected", "interfaces": []string{"no-such-if0"}, "port": port}, 400)
+	e.call("PUT", "/api/dns/listen", map[string]any{"mode": "selected", "port": port}, 400)
+}
+
+func TestIntegrationQueryLogPaging(t *testing.T) {
+	e := newTestEnv(t)
+	ctx := context.Background()
+	rows := make([][]any, 0, 130)
+	now := time.Now().UTC()
+	for i := 0; i < 120; i++ {
+		action := "forwarded"
+		if i%4 == 0 {
+			action = "blocked"
+		}
+		rows = append(rows, []any{now.Add(-time.Duration(i) * time.Second), "198.51.100.7", fmt.Sprintf("n%03d.example", i), "A", action})
+	}
+	for i := 0; i < 10; i++ { // older than 12 hours
+		rows = append(rows, []any{now.Add(-13 * time.Hour), "198.51.100.8", "old.example", "A", "forwarded"})
+	}
+	if _, err := e.app.db.CopyFrom(ctx, pgx.Identifier{"dns_query_log"}, []string{"at", "client", "qname", "qtype", "action"}, pgx.CopyFromRows(rows)); err != nil {
+		t.Fatal(err)
+	}
+	p := e.call("GET", "/api/dns/querylog?page=2&page_size=50", nil, 200)
+	if p["total"].(float64) != 130 || p["pages"].(float64) != 3 || p["page"].(float64) != 2 || len(p["entries"].([]any)) != 50 {
+		t.Fatalf("page 2: total=%v pages=%v page=%v n=%d", p["total"], p["pages"], p["page"], len(p["entries"].([]any)))
+	}
+	if first := p["entries"].([]any)[0].(map[string]any)["name"]; first != "n050.example" {
+		t.Fatalf("page 2 starts with %v", first)
+	}
+	b := e.call("GET", "/api/dns/querylog?action=blocked&page_size=25", nil, 200)
+	if b["total"].(float64) != 30 {
+		t.Fatalf("blocked total %v", b["total"])
+	}
+	if last := e.call("GET", "/api/dns/querylog?page=99", nil, 200); last["page"].(float64) != 3 {
+		t.Fatalf("page beyond the end not clamped: %v", last["page"])
+	}
+	e.call("PUT", "/api/dns/querylog/settings", map[string]int{"retention_hours": 0}, 400)
+	e.call("PUT", "/api/dns/querylog/settings", map[string]int{"retention_hours": 12}, 200)
+	if after := e.call("GET", "/api/dns/querylog", nil, 200); after["total"].(float64) != 120 || after["retention_hours"].(float64) != 12 {
+		t.Fatalf("after 12h retention: total=%v retention=%v", after["total"], after["retention_hours"])
+	}
+}

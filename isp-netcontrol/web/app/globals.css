@@ -162,3 +162,12 @@ pre.block { background: var(--bg); border: 1px solid var(--border); border-radiu
 a.button-link { display: inline-block; border: 1px solid var(--accent); color: var(--accent); border-radius: 6px; padding: 4px 10px; font-size: 13px; font-weight: 500; }
 a.button-link:hover { text-decoration: none; background: var(--bg); }
 .grid.kpis { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+.tabs { display: flex; flex-wrap: wrap; gap: 6px; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+.tabs button { background: transparent; color: var(--text); border: 1px solid var(--border); padding: 5px 12px; border-radius: 999px; font-weight: 500; }
+.tabs button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.pager { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-top: 14px; }
+.pages { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.pages button { padding: 4px 10px; min-width: 36px; }
+a.rank-link { color: inherit; }
+a.rank-link:hover { text-decoration: none; }
+a.rank-link:hover .name { text-decoration: underline; }

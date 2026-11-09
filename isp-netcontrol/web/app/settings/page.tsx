@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { put } from "@/lib/api";
 import { Alert, Shell, useAction, useLoad } from "@/components/ui";
+import ListenPanel from "@/components/ListenPanel";
 
 type Settings = { upstreams: string[]; block_mode: string; sinkhole_v4: string; sinkhole_v6: string; allowed_clients: string[]; filtering_enabled: boolean };
 
@@ -26,6 +27,8 @@ export default function SettingsPage() {
     <Shell>
       <h1>DNS settings</h1>
       <p className="muted">These settings work in every license state, so subscribers keep getting answers even when filtering is unavailable.</p>
+      <ListenPanel />
+      <h2 style={{ marginTop: 8 }}>Resolver</h2>
       <Alert kind="error">{error || act.error}</Alert>
       <Alert kind="success">{act.ok}</Alert>
       {f && (

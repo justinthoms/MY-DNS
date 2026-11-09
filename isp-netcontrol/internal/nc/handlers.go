@@ -286,42 +286,11 @@ func (a *App) deleteDomain(table string) fiber.Handler {
 	}
 }
 
-func (a *App) queryLog(c *fiber.Ctx) error {
-	limit := c.QueryInt("limit", 200)
-	if limit < 1 || limit > 2000 {
-		limit = 200
-	}
-	q := "%" + strings.ToLower(strings.TrimSpace(c.Query("q"))) + "%"
-	action := c.Query("action")
-	rows, err := a.db.Query(c.UserContext(), `SELECT at, coalesce(host(client),''), qname, qtype, action FROM dns_query_log
-		WHERE (qname LIKE $1 OR coalesce(host(client),'') LIKE $1) AND ($2 = '' OR action = $2) ORDER BY at DESC LIMIT $3`, q, action, limit)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	type entry struct {
-		At     time.Time `json:"at"`
-		Client string    `json:"client"`
-		Name   string    `json:"name"`
-		Type   string    `json:"type"`
-		Action string    `json:"action"`
-	}
-	out := []entry{}
-	for rows.Next() {
-		var e entry
-		if err := rows.Scan(&e.At, &e.Client, &e.Name, &e.Type, &e.Action); err != nil {
-			return err
-		}
-		out = append(out, e)
-	}
-	return c.JSON(out)
-}
-
 // queryLogWriter stores query events in batches and prunes old rows.
 func (a *App) queryLogWriter(ctx context.Context) {
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
-	prune := time.NewTicker(time.Hour)
+	prune := time.NewTicker(10 * time.Minute)
 	defer prune.Stop()
 	var batch [][]any
 	flush := func() {
@@ -351,9 +320,7 @@ func (a *App) queryLogWriter(ctx context.Context) {
 		case <-tick.C:
 			flush()
 		case <-prune.C:
-			if _, err := a.db.Exec(ctx, `DELETE FROM dns_query_log WHERE at < now() - make_interval(days => $1)`, a.cfg.QueryLogDays); err != nil {
-				log.Printf("query log prune: %v", err)
-			}
+			a.pruneQueryLog(ctx)
 		}
 	}
 }

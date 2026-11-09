@@ -83,3 +83,7 @@ CREATE TABLE IF NOT EXISTS blocklist_sources (
 -- Entries that came from a subscription; NULL = added by hand.
 ALTER TABLE dns_blocklist ADD COLUMN IF NOT EXISTS source_id BIGINT REFERENCES blocklist_sources(id) ON DELETE CASCADE;
 CREATE INDEX IF NOT EXISTS dns_blocklist_source ON dns_blocklist(source_id);
+
+-- ---- v1.2.0 ---------------------------------------------------------------
+-- Fast "Blocked / Refused / Failed" tabs in the query log.
+CREATE INDEX IF NOT EXISTS dns_query_log_action_at ON dns_query_log(action, at DESC);

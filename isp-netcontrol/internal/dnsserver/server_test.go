@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -108,5 +109,32 @@ func TestResolverEndToEnd(t *testing.T) {
 	s.SetPolicy(&np2)
 	if r := ask("fine.test"); r.Rcode != dns.RcodeRefused {
 		t.Fatalf("acl: rcode %s", dns.RcodeToString[r.Rcode])
+	}
+}
+
+func TestRebindAndRollback(t *testing.T) {
+	up := fakeUpstream(t)
+	s := New(&Policy{Upstreams: []string{up}, Allowed: map[string]bool{}, Blocked: map[string]string{},
+		AllowedClients: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}})
+	defer s.Shutdown()
+	a1, a2 := freeAddr(t), strings.Replace(freeAddr(t), "127.0.0.1", "127.0.0.2", 1)
+	ok := func(addr string) bool {
+		m := new(dns.Msg)
+		m.SetQuestion("x.example.", dns.TypeA)
+		r, _, err := (&dns.Client{Timeout: time.Second}).Exchange(m, addr)
+		return err == nil && r.Rcode == dns.RcodeSuccess
+	}
+	if err := s.Listen([]string{a1}); err != nil || !ok(a1) {
+		t.Fatalf("first bind: %v", err)
+	}
+	if err := s.Listen([]string{a2}); err != nil || !ok(a2) || ok(a1) {
+		t.Fatalf("rebind: err=%v new=%v old=%v", err, ok(a2), ok(a1))
+	}
+	// 192.0.2.1 is not on this machine: the bind fails and a2 is restored.
+	if err := s.Listen([]string{a2, "192.0.2.1:53"}); err == nil {
+		t.Fatal("bind to a foreign address succeeded")
+	}
+	if !ok(a2) || len(s.Addrs()) != 1 || s.Addrs()[0] != a2 {
+		t.Fatalf("not rolled back: addrs %v", s.Addrs())
 	}
 }
