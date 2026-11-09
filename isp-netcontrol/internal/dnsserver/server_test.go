@@ -138,3 +138,59 @@ func TestRebindAndRollback(t *testing.T) {
 		t.Fatalf("not rolled back: addrs %v", s.Addrs())
 	}
 }
+
+func TestNewCountersAndUpstreamHealth(t *testing.T) {
+	// Upstream that answers NXDOMAIN for "gone.example" and A records otherwise.
+	pc, _ := net.ListenPacket("udp", "127.0.0.1:0")
+	up := &dns.Server{PacketConn: pc, Handler: dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {
+		m := new(dns.Msg)
+		m.SetReply(r)
+		if r.Question[0].Name == "gone.example." {
+			m.Rcode = dns.RcodeNameError
+		} else {
+			m.Answer = append(m.Answer, &dns.A{Hdr: dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60}, A: net.ParseIP("192.0.2.1")})
+		}
+		_ = w.WriteMsg(m)
+	})}
+	go func() { _ = up.ActivateAndServe() }()
+	defer up.Shutdown()
+	dead := freeAddr(t) // nothing listens here
+	s := New(&Policy{Filtering: true, BlockMode: "nxdomain", Upstreams: []string{dead, pc.LocalAddr().String()},
+		Blocked: map[string]string{"bad.example": "malware"}, Allowed: map[string]bool{}, LogQueries: true,
+		AllowedClients: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}})
+	s.client.Timeout = 300 * time.Millisecond
+	addr := freeAddr(t)
+	if err := s.Listen([]string{addr}); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Shutdown()
+	ask := func(n string) {
+		m := new(dns.Msg)
+		m.SetQuestion(dns.Fqdn(n), dns.TypeA)
+		if _, _, err := (&dns.Client{Timeout: 3 * time.Second}).Exchange(m, addr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ask("gone.example")
+	ask("gone.example") // from cache, still NXDOMAIN
+	ask("ok.example")
+	ask("www.bad.example")
+	st := s.Stats()
+	if st.Nxdomain != 2 || st.LatencyCount != 2 || st.LatencyUsSum == 0 || st.Blocked != 1 {
+		t.Fatalf("stats %+v", st)
+	}
+	ups := s.UpstreamStats()
+	if len(ups) != 2 || *ups[0].Healthy || ups[0].Failures == 0 || !*ups[1].Healthy || ups[1].AvgMs <= 0 {
+		t.Fatalf("upstreams %+v %+v", ups[0], ups[1])
+	}
+	var blockedEv QueryEvent
+	for i := 0; i < 4; i++ {
+		ev := <-s.Events()
+		if ev.Action == "blocked" {
+			blockedEv = ev
+		}
+	}
+	if blockedEv.Category != "malware" {
+		t.Fatalf("blocked event category %q", blockedEv.Category)
+	}
+}

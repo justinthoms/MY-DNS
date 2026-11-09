@@ -87,3 +87,9 @@ CREATE INDEX IF NOT EXISTS dns_blocklist_source ON dns_blocklist(source_id);
 -- ---- v1.2.0 ---------------------------------------------------------------
 -- Fast "Blocked / Refused / Failed" tabs in the query log.
 CREATE INDEX IF NOT EXISTS dns_query_log_action_at ON dns_query_log(action, at DESC);
+
+-- ---- v1.3.0 ---------------------------------------------------------------
+ALTER TABLE dns_stats_minute ADD COLUMN IF NOT EXISTS nxdomain BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE dns_stats_minute ADD COLUMN IF NOT EXISTS latency_us_sum BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE dns_stats_minute ADD COLUMN IF NOT EXISTS latency_count BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE dns_query_log ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT '';

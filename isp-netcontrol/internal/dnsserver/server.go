@@ -35,11 +35,12 @@ type Policy struct {
 
 // QueryEvent is emitted for the query log.
 type QueryEvent struct {
-	At     time.Time
-	Client netip.Addr
-	Name   string
-	Type   string
-	Action string // forwarded, cached, blocked, refused, failed, local
+	At       time.Time
+	Client   netip.Addr
+	Name     string
+	Type     string
+	Action   string // forwarded, cached, blocked, refused, failed, local
+	Category string // block-list category, for blocked queries
 }
 
 // Stats are cumulative counters since start.
@@ -51,18 +52,26 @@ type Stats struct {
 	Refused   uint64 `json:"refused"`
 	Failed    uint64 `json:"failed"`
 	Local     uint64 `json:"local"`
+	// Nxdomain counts answered queries whose name does not exist (from the
+	// upstream or the cache; blocked queries are not counted here).
+	Nxdomain uint64 `json:"nxdomain"`
+	// LatencyUsSum / LatencyCount: upstream response time of forwarded queries.
+	LatencyUsSum uint64 `json:"latency_us_sum"`
+	LatencyCount uint64 `json:"latency_count"`
 }
 
 // Sub returns the counters accumulated since an earlier snapshot.
 func (a Stats) Sub(b Stats) Stats {
 	return Stats{Total: a.Total - b.Total, Forwarded: a.Forwarded - b.Forwarded, Cached: a.Cached - b.Cached,
-		Blocked: a.Blocked - b.Blocked, Refused: a.Refused - b.Refused, Failed: a.Failed - b.Failed, Local: a.Local - b.Local}
+		Blocked: a.Blocked - b.Blocked, Refused: a.Refused - b.Refused, Failed: a.Failed - b.Failed, Local: a.Local - b.Local,
+		Nxdomain: a.Nxdomain - b.Nxdomain, LatencyUsSum: a.LatencyUsSum - b.LatencyUsSum, LatencyCount: a.LatencyCount - b.LatencyCount}
 }
 
 // Add sums two sets of counters.
 func (a Stats) Add(b Stats) Stats {
 	return Stats{Total: a.Total + b.Total, Forwarded: a.Forwarded + b.Forwarded, Cached: a.Cached + b.Cached,
-		Blocked: a.Blocked + b.Blocked, Refused: a.Refused + b.Refused, Failed: a.Failed + b.Failed, Local: a.Local + b.Local}
+		Blocked: a.Blocked + b.Blocked, Refused: a.Refused + b.Refused, Failed: a.Failed + b.Failed, Local: a.Local + b.Local,
+		Nxdomain: a.Nxdomain + b.Nxdomain, LatencyUsSum: a.LatencyUsSum + b.LatencyUsSum, LatencyCount: a.LatencyCount + b.LatencyCount}
 }
 
 // Server is a running resolver.
@@ -73,9 +82,12 @@ type Server struct {
 	lmu     sync.Mutex // guards servers and addrs
 	servers []*dns.Server
 	addrs   []string
-	stats   struct{ total, forwarded, cached, blocked, refused, failed, local atomic.Uint64 }
-	client  *dns.Client
-	tcp     *dns.Client
+	stats   struct {
+		total, forwarded, cached, blocked, refused, failed, local, nxdomain, latUs, latN atomic.Uint64
+	}
+	ups    upstreams
+	client *dns.Client
+	tcp    *dns.Client
 }
 
 // New creates a server with an initial policy.
@@ -108,7 +120,8 @@ func (s *Server) Stats() Stats {
 	return Stats{
 		Total: s.stats.total.Load(), Forwarded: s.stats.forwarded.Load(), Cached: s.stats.cached.Load(),
 		Blocked: s.stats.blocked.Load(), Refused: s.stats.refused.Load(), Failed: s.stats.failed.Load(),
-		Local: s.stats.local.Load(),
+		Local: s.stats.local.Load(), Nxdomain: s.stats.nxdomain.Load(),
+		LatencyUsSum: s.stats.latUs.Load(), LatencyCount: s.stats.latN.Load(),
 	}
 }
 
@@ -296,9 +309,10 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 		return
 	}
 	if p.Filtering {
-		if d, _ := p.Decide(q.Name); d == "blocked" {
+		if d, cat := p.Decide(q.Name); d == "blocked" {
 			s.stats.blocked.Add(1)
 			ev.Action = "blocked"
+			ev.Category = cat
 			s.emit(p, ev)
 			_ = w.WriteMsg(s.blockedAnswer(p, req))
 			return
@@ -306,12 +320,23 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 	}
 	if resp := s.cache.get(req); resp != nil {
 		s.stats.cached.Add(1)
+		if resp.Rcode == dns.RcodeNameError {
+			s.stats.nxdomain.Add(1)
+		}
 		ev.Action = "cached"
 		s.emit(p, ev)
 		_ = w.WriteMsg(resp)
 		return
 	}
+	t0 := time.Now()
 	resp, err := s.forward(p, req)
+	if err == nil {
+		s.stats.latUs.Add(uint64(time.Since(t0).Microseconds()))
+		s.stats.latN.Add(1)
+		if resp.Rcode == dns.RcodeNameError {
+			s.stats.nxdomain.Add(1)
+		}
+	}
 	if err != nil {
 		s.stats.failed.Add(1)
 		ev.Action = "failed"
@@ -370,16 +395,17 @@ func (s *Server) forward(p *Policy, req *dns.Msg) (*dns.Msg, error) {
 	}
 	var lastErr error = errors.New("no upstream resolvers configured")
 	for _, up := range p.Upstreams {
+		t0 := time.Now()
 		resp, _, err := s.client.Exchange(out, up)
 		if err == nil && resp.Truncated {
 			resp, _, err = s.tcp.Exchange(out, up)
 		}
+		if err == nil && (resp.Rcode == dns.RcodeServerFailure || resp.Rcode == dns.RcodeRefused) {
+			err = errors.New("upstream " + up + " answered " + dns.RcodeToString[resp.Rcode])
+		}
+		s.ups.record(up, time.Since(t0), err)
 		if err != nil {
 			lastErr = err
-			continue
-		}
-		if resp.Rcode == dns.RcodeServerFailure || resp.Rcode == dns.RcodeRefused {
-			lastErr = errors.New("upstream " + up + " answered " + dns.RcodeToString[resp.Rcode])
 			continue
 		}
 		return resp, nil

@@ -297,7 +297,7 @@ func (a *App) queryLogWriter(ctx context.Context) {
 		if len(batch) == 0 {
 			return
 		}
-		if _, err := a.db.CopyFrom(ctx, pgx.Identifier{"dns_query_log"}, []string{"at", "client", "qname", "qtype", "action"},
+		if _, err := a.db.CopyFrom(ctx, pgx.Identifier{"dns_query_log"}, []string{"at", "client", "qname", "qtype", "action", "category"},
 			pgx.CopyFromRows(batch)); err != nil {
 			log.Printf("query log: %v", err)
 		}
@@ -313,7 +313,7 @@ func (a *App) queryLogWriter(ctx context.Context) {
 			if ev.Client.IsValid() {
 				client = ev.Client
 			}
-			batch = append(batch, []any{ev.At, client, trunc(ev.Name, 253), ev.Type, ev.Action})
+			batch = append(batch, []any{ev.At, client, trunc(ev.Name, 253), ev.Type, ev.Action, trunc(ev.Category, 64)})
 			if len(batch) >= 1000 {
 				flush()
 			}

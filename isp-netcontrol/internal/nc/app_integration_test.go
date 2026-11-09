@@ -474,3 +474,60 @@ func TestIntegrationListenDefaultsAreLists(t *testing.T) {
 		t.Fatalf("unsaved listen settings must use empty lists: %s", raw[:200])
 	}
 }
+
+func TestIntegrationDashboardData(t *testing.T) {
+	e := newTestEnv(t)
+	pc, _ := net.ListenPacket("udp", "127.0.0.1:0")
+	up := &dns.Server{PacketConn: pc, Handler: dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {
+		m := new(dns.Msg)
+		m.SetReply(r)
+		if r.Question[0].Name == "gone.example." {
+			m.Rcode = dns.RcodeNameError
+		} else if r.Question[0].Qtype == dns.TypeA {
+			m.Answer = append(m.Answer, &dns.A{Hdr: dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60}, A: net.ParseIP("192.0.2.1")})
+		}
+		_ = w.WriteMsg(m)
+	})}
+	go func() { _ = up.ActivateAndServe() }()
+	defer up.Shutdown()
+	e.call("PUT", "/api/dns/settings", map[string]any{"upstreams": []string{pc.LocalAddr().String()}, "block_mode": "nxdomain",
+		"sinkhole_v4": "0.0.0.0", "sinkhole_v6": "::", "allowed_clients": []string{"127.0.0.0/8"}, "filtering_enabled": true}, 200)
+	e.call("POST", "/api/dns/blocklist", map[string]string{"domain": "bad.example", "category": "malware"}, 201)
+	e.query("ok.example", dns.TypeA)
+	e.query("ok.example", dns.TypeAAAA)
+	e.query("gone.example", dns.TypeA)
+	e.query("x.bad.example", dns.TypeA)
+	e.app.flushStats(context.Background(), time.Now().UTC().Truncate(time.Minute))
+
+	ts := e.call("GET", "/api/dns/timeseries?range=15m", nil, 200)
+	tot := ts["totals"].(map[string]any)
+	if tot["total"].(float64) != 4 || tot["nxdomain"].(float64) != 1 || tot["blocked"].(float64) != 1 || tot["avg_ms"] == nil {
+		t.Fatalf("totals %v", tot)
+	}
+	if n := len(ts["points"].([]any)); n != 15 {
+		t.Fatalf("15m points: %d", n)
+	}
+	if _, ok := ts["previous"].(map[string]any)["total"]; !ok || ts["qps"] == nil {
+		t.Fatalf("previous/qps missing: %v", ts)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		b := e.call("GET", "/api/dns/breakdown?range=15m", nil, 200)
+		types, cats := fmt.Sprint(b["query_types"]), fmt.Sprint(b["block_categories"])
+		if strings.Contains(types, "key:A]") && strings.Contains(types, "AAAA") && strings.Contains(cats, "malware") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("breakdown: %v", b)
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	h := e.call("GET", "/api/system/health", nil, 200)
+	ups := h["upstreams"].([]any)
+	if len(ups) != 1 || ups[0].(map[string]any)["healthy"] != true || h["database"].(map[string]any)["ok"] != true || h["dns"].(map[string]any)["ok"] != true {
+		t.Fatalf("health: %v", h)
+	}
+	if hostCPUs := h["host"].(map[string]any)["cpus"].(float64); hostCPUs < 1 {
+		t.Fatalf("host: %v", h["host"])
+	}
+}

@@ -294,6 +294,8 @@ func (a *App) routes() *fiber.App {
 	p.Put("/dns/settings", a.updateDNSSettings)
 	p.Get("/dns/stats", a.dnsStats)
 	p.Get("/dns/timeseries", a.timeseries)
+	p.Get("/dns/breakdown", a.requireFeature("query-log"), a.breakdown)
+	p.Get("/system/health", a.systemHealth)
 	// Local records are core resolver functionality: available in every license state.
 	p.Get("/dns/records", a.listRecords)
 	p.Post("/dns/records", a.addRecord)

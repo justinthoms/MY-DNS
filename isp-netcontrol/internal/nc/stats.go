@@ -38,12 +38,13 @@ func (a *App) flushStats(ctx context.Context, minute time.Time) {
 	if d.Total == 0 {
 		return
 	}
-	_, err := a.db.Exec(ctx, `INSERT INTO dns_stats_minute(minute, total, forwarded, cached, blocked, refused, failed, local)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+	_, err := a.db.Exec(ctx, `INSERT INTO dns_stats_minute(minute, total, forwarded, cached, blocked, refused, failed, local, nxdomain, latency_us_sum, latency_count)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 		ON CONFLICT (minute) DO UPDATE SET total=dns_stats_minute.total+$2, forwarded=dns_stats_minute.forwarded+$3,
 		cached=dns_stats_minute.cached+$4, blocked=dns_stats_minute.blocked+$5, refused=dns_stats_minute.refused+$6,
-		failed=dns_stats_minute.failed+$7, local=dns_stats_minute.local+$8`,
-		minute, d.Total, d.Forwarded, d.Cached, d.Blocked, d.Refused, d.Failed, d.Local)
+		failed=dns_stats_minute.failed+$7, local=dns_stats_minute.local+$8, nxdomain=dns_stats_minute.nxdomain+$9,
+		latency_us_sum=dns_stats_minute.latency_us_sum+$10, latency_count=dns_stats_minute.latency_count+$11`,
+		minute, d.Total, d.Forwarded, d.Cached, d.Blocked, d.Refused, d.Failed, d.Local, d.Nxdomain, d.LatencyUsSum, d.LatencyCount)
 	if err != nil {
 		log.Printf("stats: %v", err)
 		return
@@ -81,6 +82,7 @@ type statRange struct {
 }
 
 var statRanges = map[string]statRange{
+	"15m": {15 * time.Minute, time.Minute},
 	"1h":  {time.Hour, time.Minute},
 	"24h": {24 * time.Hour, 15 * time.Minute},
 	"7d":  {7 * 24 * time.Hour, 2 * time.Hour},
@@ -96,6 +98,30 @@ type statPoint struct {
 	Refused   int64     `json:"refused"`
 	Failed    int64     `json:"failed"`
 	Local     int64     `json:"local"`
+	Nxdomain  int64     `json:"nxdomain"`
+	LatUs     int64     `json:"-"`
+	LatN      int64     `json:"-"`
+	AvgMs     *float64  `json:"avg_ms"` // upstream response time; null when nothing was forwarded
+}
+
+func (p *statPoint) sum(o statPoint) {
+	p.Total += o.Total
+	p.Forwarded += o.Forwarded
+	p.Cached += o.Cached
+	p.Blocked += o.Blocked
+	p.Refused += o.Refused
+	p.Failed += o.Failed
+	p.Local += o.Local
+	p.Nxdomain += o.Nxdomain
+	p.LatUs += o.LatUs
+	p.LatN += o.LatN
+}
+
+func (p *statPoint) finish() {
+	if p.LatN > 0 {
+		v := float64(p.LatUs) / float64(p.LatN) / 1000
+		p.AvgMs = &v
+	}
 }
 
 func (p *statPoint) add(s dnsserver.Stats) {
@@ -106,6 +132,9 @@ func (p *statPoint) add(s dnsserver.Stats) {
 	p.Refused += int64(s.Refused)
 	p.Failed += int64(s.Failed)
 	p.Local += int64(s.Local)
+	p.Nxdomain += int64(s.Nxdomain)
+	p.LatUs += int64(s.LatencyUsSum)
+	p.LatN += int64(s.LatencyCount)
 }
 
 // timeseries returns counters in buckets for the dashboard graph, including
@@ -114,13 +143,14 @@ func (a *App) timeseries(c *fiber.Ctx) error {
 	key := c.Query("range", "24h")
 	r, ok := statRanges[key]
 	if !ok {
-		return bad(c, "range must be 1h, 24h, 7d or 30d")
+		return bad(c, "range must be 15m, 1h, 24h, 7d or 30d")
 	}
 	now := time.Now().UTC()
 	end := now.Truncate(r.bucket)
 	start := end.Add(-r.span + r.bucket)
 	rows, err := a.db.Query(c.UserContext(), `SELECT date_bin($1::interval, minute, TIMESTAMPTZ '2000-01-01') AS b,
-		sum(total), sum(forwarded), sum(cached), sum(blocked), sum(refused), sum(failed), sum(local)
+		sum(total), sum(forwarded), sum(cached), sum(blocked), sum(refused), sum(failed), sum(local),
+		sum(nxdomain), sum(latency_us_sum), sum(latency_count)
 		FROM dns_stats_minute WHERE minute >= $2 GROUP BY b`,
 		fmt.Sprintf("%d seconds", int(r.bucket.Seconds())), start)
 	if err != nil {
@@ -130,7 +160,8 @@ func (a *App) timeseries(c *fiber.Ctx) error {
 	byT := map[int64]statPoint{}
 	for rows.Next() {
 		var p statPoint
-		if err := rows.Scan(&p.T, &p.Total, &p.Forwarded, &p.Cached, &p.Blocked, &p.Refused, &p.Failed, &p.Local); err != nil {
+		if err := rows.Scan(&p.T, &p.Total, &p.Forwarded, &p.Cached, &p.Blocked, &p.Refused, &p.Failed, &p.Local,
+			&p.Nxdomain, &p.LatUs, &p.LatN); err != nil {
 			return err
 		}
 		byT[p.T.Unix()] = p
@@ -146,16 +177,30 @@ func (a *App) timeseries(c *fiber.Ctx) error {
 		if t.Equal(end) {
 			p.add(a.pendingStats()) // live: counts since the last flush
 		}
-		totals.Total += p.Total
-		totals.Forwarded += p.Forwarded
-		totals.Cached += p.Cached
-		totals.Blocked += p.Blocked
-		totals.Refused += p.Refused
-		totals.Failed += p.Failed
-		totals.Local += p.Local
+		totals.sum(p)
+		p.finish()
 		points = append(points, p)
 	}
-	return c.JSON(fiber.Map{"range": key, "bucket_seconds": int(r.bucket.Seconds()), "points": points, "totals": totals})
+	totals.finish()
+	// The same span just before, for "vs previous period".
+	var prev statPoint
+	if err := a.db.QueryRow(c.UserContext(), `SELECT coalesce(sum(total),0), coalesce(sum(forwarded),0), coalesce(sum(cached),0),
+		coalesce(sum(blocked),0), coalesce(sum(refused),0), coalesce(sum(failed),0), coalesce(sum(local),0),
+		coalesce(sum(nxdomain),0), coalesce(sum(latency_us_sum),0), coalesce(sum(latency_count),0)
+		FROM dns_stats_minute WHERE minute >= $1 AND minute < $2`, start.Add(-r.span), start).
+		Scan(&prev.Total, &prev.Forwarded, &prev.Cached, &prev.Blocked, &prev.Refused, &prev.Failed, &prev.Local,
+			&prev.Nxdomain, &prev.LatUs, &prev.LatN); err != nil {
+		return err
+	}
+	prev.finish()
+	// Peak and current queries per second, from whole minutes.
+	var peakMinute int64
+	_ = a.db.QueryRow(c.UserContext(), `SELECT coalesce(max(total),0) FROM dns_stats_minute WHERE minute >= $1`, start).Scan(&peakMinute)
+	var lastMinute int64
+	_ = a.db.QueryRow(c.UserContext(), `SELECT coalesce(sum(total),0) FROM dns_stats_minute WHERE minute = $1`, now.Truncate(time.Minute).Add(-time.Minute)).Scan(&lastMinute)
+	qps := fiber.Map{"current": float64(lastMinute) / 60, "peak": float64(peakMinute) / 60}
+	return c.JSON(fiber.Map{"range": key, "bucket_seconds": int(r.bucket.Seconds()), "points": points, "totals": totals,
+		"previous": prev, "qps": qps})
 }
 
 type topItem struct {
@@ -170,7 +215,7 @@ func (a *App) top(c *fiber.Ctx) error {
 	key := c.Query("range", "24h")
 	r, ok := statRanges[key]
 	if !ok {
-		return bad(c, "range must be 1h, 24h, 7d or 30d")
+		return bad(c, "range must be 15m, 1h, 24h, 7d or 30d")
 	}
 	since := time.Now().UTC().Add(-r.span)
 	ctx := c.UserContext()
@@ -210,7 +255,7 @@ func (a *App) exportQueryLog(c *fiber.Ctx) error {
 	key := c.Query("range", "24h")
 	r, ok := statRanges[key]
 	if !ok {
-		return bad(c, "range must be 1h, 24h, 7d or 30d")
+		return bad(c, "range must be 15m, 1h, 24h, 7d or 30d")
 	}
 	q := "%" + strings.ToLower(strings.TrimSpace(c.Query("q"))) + "%"
 	action := c.Query("action")
