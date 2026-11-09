@@ -29,6 +29,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/miekg/dns"
 
+	"github.com/justinthoms/my-dns/shared/authkit"
 	"github.com/justinthoms/my-dns/shared/licensecore"
 )
 
@@ -420,4 +421,48 @@ func TestIntegrationAnycastGuards(t *testing.T) {
 	if s["fail_threshold"].(float64) != 4 || s["enabled"] != false || g["status"].(map[string]any)["enabled"] != false {
 		t.Fatalf("stored: %v", g)
 	}
+}
+
+func TestIntegrationAdminsAndRecovery(t *testing.T) {
+	e := newTestEnv(t)
+	r := e.call("POST", "/api/admins", map[string]string{"email": "Noc2@ISP.example", "password": "Second-Admin-0001"}, 201)
+	id := r["id"]
+	e.call("POST", "/api/admins", map[string]string{"email": "noc2@isp.example", "password": "Second-Admin-0001"}, 409)
+	e.call("POST", "/api/admins", map[string]string{"email": "weak@isp.example", "password": "short"}, 400)
+	list := string(e.raw("GET", "/api/admins", nil, 200))
+	if !strings.Contains(list, "noc2@isp.example") || !strings.Contains(list, "noc@isp.example") {
+		t.Fatalf("list: %s", list)
+	}
+	me := e.call("GET", "/api/auth/me", nil, 200)
+	myID := me["user"].(map[string]any)["id"]
+	e.call("DELETE", fmt.Sprintf("/api/admins/%v", myID), nil, 400) // cannot delete yourself
+
+	// Recovery: a new temporary password works and must be changed.
+	ctx := context.Background()
+	pw, err := authkitResetPassword(ctx, e, "NOC2@isp.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := &testEnv{t: t, app: e.app, dns: e.dns}
+	r = other.call("POST", "/api/auth/login", map[string]string{"email": "noc2@isp.example", "password": pw}, 200)
+	if r["next"] != "change_password" {
+		t.Fatalf("after reset: %v", r)
+	}
+	if _, err := authkitResetPassword(ctx, e, "nobody@isp.example"); err == nil {
+		t.Fatal("reset of unknown admin succeeded")
+	}
+	e.call("DELETE", fmt.Sprintf("/api/admins/%v", id), nil, 200)
+	if strings.Contains(string(e.raw("GET", "/api/admins", nil, 200)), "noc2@") {
+		t.Fatal("admin not deleted")
+	}
+	audit := string(e.raw("GET", "/api/audit", nil, 200))
+	for _, want := range []string{"admin.created", "admin.password_reset", "admin.deleted"} {
+		if !strings.Contains(audit, want) {
+			t.Fatalf("audit lacks %s", want)
+		}
+	}
+}
+
+func authkitResetPassword(ctx context.Context, e *testEnv, email string) (string, error) {
+	return authkit.ResetPassword(ctx, e.app.db, email)
 }

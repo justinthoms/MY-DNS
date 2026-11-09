@@ -21,6 +21,16 @@ func main() {
 		case "version":
 			fmt.Println(nc.Version)
 			return
+		case "admin":
+			cfg, err := nc.ConfigFromEnv()
+			if err != nil {
+				log.Fatalf("config: %v", err)
+			}
+			if err := nc.AdminCommand(context.Background(), cfg, os.Args[2:]); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			return
 		case "hardware-id":
 			// Prints the fingerprint for offline activation without starting.
 			cfg, _ := nc.ConfigFromEnv()

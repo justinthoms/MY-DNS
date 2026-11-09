@@ -24,7 +24,7 @@ import (
 )
 
 // Version is the product version reported to the License Manager.
-const Version = "1.1.0"
+const Version = "1.2.0"
 
 // Config is read from the environment (see deploy/.env.example).
 type Config struct {
@@ -277,6 +277,7 @@ func (a *App) routes() *fiber.App {
 	a.auth.Mount(api.Group("/auth"))
 	p := api.Group("", a.auth.Require())
 	p.Get("/status", a.status)
+	a.auth.MountAdmins(p.Group("/admins"))
 	p.Get("/audit", a.listAudit)
 
 	p.Get("/license", a.getLicense)
@@ -342,4 +343,46 @@ func (a *App) requireFeature(f string) fiber.Handler {
 		}
 		return c.Next()
 	}
+}
+
+// AdminCommand runs "isp-netcontrol admin ..." recovery commands against the
+// database only (no DNS or console is started).
+func AdminCommand(ctx context.Context, cfg Config, args []string) error {
+	usage := errors.New("usage: isp-netcontrol admin list | reset-password <email> | reset-2fa <email>")
+	if len(args) == 0 {
+		return usage
+	}
+	db, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if err := db.Ping(ctx); err != nil {
+		return fmt.Errorf("database: %w", err)
+	}
+	switch {
+	case args[0] == "list" && len(args) == 1:
+		list, err := authkit.ListAdmins(ctx, db)
+		if err != nil {
+			return err
+		}
+		for _, x := range list {
+			fmt.Printf("%-40s two-factor=%-5v locked=%v\n", x.Email, x.TOTPEnabled, x.Locked)
+		}
+		return nil
+	case args[0] == "reset-password" && len(args) == 2:
+		pw, err := authkit.ResetPassword(ctx, db, args[1])
+		if err != nil {
+			return err
+		}
+		fmt.Printf("New temporary password for %s: %s\nIt must be changed at the next sign-in.\n", args[1], pw)
+		return nil
+	case args[0] == "reset-2fa" && len(args) == 2:
+		if err := authkit.ResetTOTP(ctx, db, args[1]); err != nil {
+			return err
+		}
+		fmt.Printf("Two-factor authentication removed for %s; it will be set up again at the next sign-in.\n", args[1])
+		return nil
+	}
+	return usage
 }

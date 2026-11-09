@@ -14,6 +14,7 @@ const NAV = [
   { href: "/settings", label: "DNS settings" },
   { href: "/anycast", label: "Anycast" },
   { href: "/license", label: "License" },
+  { href: "/admins", label: "Administrators" },
   { href: "/audit", label: "Audit log" },
 ];
 
