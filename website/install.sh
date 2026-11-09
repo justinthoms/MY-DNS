@@ -19,6 +19,8 @@ set -euo pipefail
 REPO="${REPO:-https://github.com/justinthoms/MY-DNS.git}"
 BRANCH="${BRANCH:-main}"
 LM_URL="${LM_URL:-https://licenses.netfixpro.in:8443}"
+# Fallback copy of the same public key(s), served by the website.
+KEY_URL="${KEY_URL:-https://dns.netfixpro.in/public-keys.pem}"
 SRC="${SRC:-/opt/isp-netcontrol-src}"
 
 say() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
@@ -48,11 +50,19 @@ else
   git clone -q --depth 1 --branch "$BRANCH" "$REPO" "$SRC"
 fi
 
-say "Fetching the license server's public signing key from $LM_URL"
+say "Fetching the license server's public signing key"
 CA_ARGS=()
 [ -n "${LM_CA:-}" ] && CA_ARGS=(--cacert "$LM_CA")
-"$SRC/isp-netcontrol/scripts/set-trusted-keys.sh" "$LM_URL" "${CA_ARGS[@]}" >/dev/null \
-  || die "could not get the signing key from $LM_URL (check that this server can reach it)"
+if ! "$SRC/isp-netcontrol/scripts/set-trusted-keys.sh" "$LM_URL" "${CA_ARGS[@]}" >/dev/null 2>&1; then
+  KEYFILE="$(mktemp)"
+  if curl -fsS --max-time 20 "$KEY_URL" -o "$KEYFILE" && "$SRC/isp-netcontrol/scripts/set-trusted-keys.sh" "$KEYFILE" >/dev/null; then
+    echo "    (from $KEY_URL)"
+  else
+    rm -f "$KEYFILE"
+    die "could not get the signing key from $LM_URL or $KEY_URL (check this server's internet access)"
+  fi
+  rm -f "$KEYFILE"
+fi
 
 EMAIL="${ADMIN_EMAIL:-}"
 if [ -z "$EMAIL" ] && [ -f /opt/isp-netcontrol/.env ]; then

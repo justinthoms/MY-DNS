@@ -17,3 +17,6 @@ next-env.d.ts
 **/deploy/state*/
 **/deploy/lm-ca.pem
 **/deploy/docker-compose.override.yml
+
+# Uploaded to Cloudflare with the website, never committed
+website/public-keys.pem
