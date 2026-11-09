@@ -121,6 +121,24 @@ dig @127.0.0.1 -p 5335 dnssec-failed.org
 The last one must return `SERVFAIL` (that domain is deliberately signed
 wrongly). Unbound needs outbound UDP and TCP port 53 to the internet.
 
+## Attack protection
+
+**Protection** in the console shows what the defences are doing and lets
+you tune them. All three are on by default and work in every license state.
+
+| Defence | Default | What it does |
+|---------|---------|--------------|
+| Rate limit per client | 500 queries/s, burst 1000 | Over the limit, UDP queries get no answer (the server cannot be used to flood a spoofed victim) and TCP queries get REFUSED. The first drop from a client every 10 seconds is written to the query log as `ratelimited`. |
+| Minimal ANY | on | `ANY` queries over UDP get a small HINFO answer (RFC 8482) instead of a large one. |
+| Random-subdomain attacks | 1000 NXDOMAIN/min, then 20 lookups/s for 10 min | When one domain (e.g. `example.com`) causes more NXDOMAIN answers per minute than the threshold, new names under it are limited; the rest get SERVFAIL (`throttled` in the query log) without querying the internet. Cached names keep working, and other domains are unaffected. |
+
+Put addresses that legitimately send a lot of queries in **Never limit**:
+NAT gateways with many subscribers behind one address, other DNS servers
+that forward to this one, monitoring, and the host you run `dnsbench` from.
+
+The dashboard's **System health** shows *Attack protection* in red while a
+domain is under attack and in amber while clients are being rate limited.
+
 ## Query log retention
 
 **Query log → Keep queries for** sets how long queries are kept (1 hour to

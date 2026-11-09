@@ -10,6 +10,13 @@
 - **Query log modes**: log every query, only blocked/refused/failed ones,
   or nothing; allowed queries can be sampled (1 in 10, 100 or 1000).
   The console warns if log entries were dropped under load.
+- **Attack protection** (new **Protection** page): per-client rate limit
+  (default 500 queries/s, exempt networks), minimal answers to ANY queries
+  (RFC 8482), and detection of random-subdomain ("water torture") attacks
+  that limits lookups for the attacked domain while cached names keep
+  working. Active attacks and rate-limited clients are shown on the
+  Protection page, the dashboard's system health and the query log
+  (`ratelimited`, `throttled`).
 - `dnsbench`: load generator and stand-in upstream for capacity tests.
 
 ### Faster

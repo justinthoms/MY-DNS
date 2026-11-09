@@ -10,6 +10,8 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"golang.org/x/sys/unix"
+
+	"github.com/justinthoms/my-dns/isp-netcontrol/internal/dnsserver"
 )
 
 var processStart = time.Now()
@@ -120,15 +122,26 @@ func (a *App) systemHealth(c *fiber.Ctx) error {
 		dbBody["error"] = dbErr.Error()
 	}
 	return c.JSON(fiber.Map{
-		"version":   Version,
-		"uptime_s":  int64(time.Since(processStart).Seconds()),
-		"dns":       fiber.Map{"listening": a.dns.Addrs(), "ok": len(a.dns.Addrs()) > 0},
-		"upstreams": a.dns.UpstreamStats(),
-		"database":  dbBody,
-		"firewall":  fiber.Map{"managed": a.fw.Enabled, "applied": fw.Applied, "rules": fw.Rules, "error": fw.Error},
-		"license":   fiber.Map{"mode": lic.Mode, "days_left": lic.DaysLeft, "message": lic.Message},
-		"anycast":   fiber.Map{"enabled": ac.Enabled, "monitor_only": ac.MonitorOnly, "interface": ac.Interface, "link_up": ac.LinkUp, "healthy": ac.Healthy, "mode": ac.Mode},
+		"version":    Version,
+		"uptime_s":   int64(time.Since(processStart).Seconds()),
+		"dns":        fiber.Map{"listening": a.dns.Addrs(), "ok": len(a.dns.Addrs()) > 0},
+		"upstreams":  a.dns.UpstreamStats(),
+		"protection": protectionSummary(a.dns.ProtectionStatus()),
+		"database":   dbBody,
+		"firewall":   fiber.Map{"managed": a.fw.Enabled, "applied": fw.Applied, "rules": fw.Rules, "error": fw.Error},
+		"license":    fiber.Map{"mode": lic.Mode, "days_left": lic.DaysLeft, "message": lic.Message},
+		"anycast":    fiber.Map{"enabled": ac.Enabled, "monitor_only": ac.MonitorOnly, "interface": ac.Interface, "link_up": ac.LinkUp, "healthy": ac.Healthy, "mode": ac.Mode},
 		"host": fiber.Map{"cpus": runtime.NumCPU(), "load": readLoadavg(), "mem_total": memTotal, "mem_available": memAvail,
 			"disk": disk},
 	})
+}
+
+// protectionSummary is the dashboard's view of the attack defences.
+func protectionSummary(st dnsserver.ProtectionStatus) fiber.Map {
+	zones := make([]string, 0, len(st.Zones))
+	for _, z := range st.Zones {
+		zones = append(zones, z.Zone)
+	}
+	return fiber.Map{"rate_limited": st.RateLimited, "throttled": st.Throttled, "minimal_any": st.MinimalANY,
+		"limited_clients": len(st.LimitedClients), "zones_under_attack": zones}
 }

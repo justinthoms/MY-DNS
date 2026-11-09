@@ -19,6 +19,7 @@ type Health = {
   firewall: { managed: boolean; applied: boolean; rules: number; error?: string };
   license: { mode: LicenseState["mode"]; days_left: number; message: string };
   anycast: { enabled: boolean; monitor_only: boolean; interface: string; link_up: boolean; healthy: boolean; mode: string };
+  protection?: { rate_limited: number; throttled: number; minimal_any: number; limited_clients: number; zones_under_attack: string[] };
   host: { cpus: number; load: number[]; mem_total: number; mem_available: number; disk: { total?: number; free?: number } };
 };
 
@@ -134,6 +135,16 @@ function Status({ level, text }: { level: Level; text: string }) {
   return <span className={`st ${level}`}><Icon d={ST_ICON[level]} />{text}</span>;
 }
 
+function protectionRow(h: Health): { name: string; level: Level; text: string; detail: string } {
+  const p = h.protection;
+  if (!p) return { name: "Attack protection", level: "off", text: "Unknown", detail: "" };
+  const zones = p.zones_under_attack;
+  const detail = `${p.rate_limited.toLocaleString("en-IN")} dropped · ${p.throttled.toLocaleString("en-IN")} attack lookups refused`;
+  if (zones.length) return { name: "Attack protection", level: "critical", text: `${zones.length} domain${zones.length > 1 ? "s" : ""} under attack`, detail: zones.join(", ") };
+  if (p.limited_clients) return { name: "Attack protection", level: "warning", text: `${p.limited_clients} client${p.limited_clients > 1 ? "s" : ""} rate limited`, detail };
+  return { name: "Attack protection", level: "good", text: "No attack", detail };
+}
+
 function SystemHealth({ h }: { h: Health }) {
   const ups = h.upstreams;
   const upOK = ups.filter((u) => u.healthy !== false).length;
@@ -147,6 +158,7 @@ function SystemHealth({ h }: { h: Health }) {
     { name: "Database (PostgreSQL)", level: h.database.ok ? "good" : "critical", text: h.database.ok ? "Running" : "Down", detail: h.database.ok ? `${h.database.ping_ms.toFixed(1)} ms ping · ${bytes(h.database.size_bytes)}` : h.database.error ?? "" },
     { name: "Firewall", level: !h.firewall.managed ? "off" : h.firewall.error ? "warning" : "good", text: !h.firewall.managed ? "Not managed" : h.firewall.applied ? "Applied" : "Not applied", detail: h.firewall.error || `${h.firewall.rules} rule(s)` },
     { name: "Anycast", level: !h.anycast.enabled ? "off" : !h.anycast.healthy ? "warning" : "good", text: !h.anycast.enabled ? "Off" : h.anycast.link_up ? "Announced" : "Withdrawn", detail: h.anycast.enabled ? `${h.anycast.interface} · ${h.anycast.monitor_only ? "monitor only" : h.anycast.mode}` : "Health control disabled" },
+    protectionRow(h),
     { name: "License", level: licLevel, text: MODE_LABEL[lic.mode][0], detail: lic.message },
     { name: "Server load", level: load > h.host.cpus * 1.5 ? "warning" : "good", text: `${load.toFixed(2)} / ${h.host.cpus} CPU`, detail: `Memory ${pct(memUsed, 1, 0)} used${h.host.disk.free != null ? ` · disk ${bytes(h.host.disk.free)} free` : ""}` },
   ];

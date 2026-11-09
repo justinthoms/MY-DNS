@@ -33,6 +33,7 @@ type Policy struct {
 	LogQueries     bool              // query-log feature licensed
 	LogMode        string            // "all" (default), "important" (blocked/refused/failed only) or "off"
 	LogSample      int               // with "all": log 1 in N allowed queries (blocked/refused/failed always)
+	Protect        Protection        // rate limiting, ANY and random-subdomain defences
 }
 
 // QueryEvent is emitted for the query log.
@@ -41,7 +42,7 @@ type QueryEvent struct {
 	Client   netip.Addr
 	Name     string
 	Type     string
-	Action   string // forwarded, cached, blocked, refused, failed, local
+	Action   string // forwarded, cached, blocked, refused, failed, local, ratelimited, throttled
 	Category string // block-list category, for blocked queries
 }
 
@@ -90,10 +91,13 @@ type Server struct {
 	servers []*dns.Server
 	addrs   []string
 	stats   struct {
-		total, forwarded, cached, blocked, refused, failed, local, nxdomain, latUs, latN, coalesced, logDropped atomic.Uint64
+		total, forwarded, cached, blocked, refused, failed, local, nxdomain, latUs, latN, coalesced, logDropped,
+		rateLimited, throttled, minimalANY atomic.Uint64
 	}
-	ups    upstreams
-	flight flight
+	ups     upstreams
+	flight  flight
+	limiter *limiter
+	torture *tortureGuard
 
 	sampleSeq atomic.Uint64
 	client    *dns.Client
@@ -109,10 +113,12 @@ func WithCacheSize(n int) Option { return func(s *Server) { s.cache = newCache(n
 
 func New(p *Policy, opts ...Option) *Server {
 	s := &Server{
-		cache:  newCache(DefaultCacheSize),
-		events: make(chan QueryEvent, 65536),
-		client: &dns.Client{Net: "udp", Timeout: 2 * time.Second, UDPSize: dns.DefaultMsgSize},
-		tcp:    &dns.Client{Net: "tcp", Timeout: 3 * time.Second},
+		cache:   newCache(DefaultCacheSize),
+		events:  make(chan QueryEvent, 65536),
+		client:  &dns.Client{Net: "udp", Timeout: 2 * time.Second, UDPSize: dns.DefaultMsgSize},
+		tcp:     &dns.Client{Net: "tcp", Timeout: 3 * time.Second},
+		limiter: newLimiter(),
+		torture: newTortureGuard(),
 	}
 	for _, o := range opts {
 		o(s)
@@ -121,6 +127,9 @@ func New(p *Policy, opts ...Option) *Server {
 	go func() {
 		for range time.Tick(30 * time.Second) {
 			s.cache.sweep()
+			now := time.Now().UnixNano()
+			s.limiter.sweep(now)
+			s.torture.sweep(now)
 		}
 	}()
 	return s
@@ -311,7 +320,8 @@ func (s *Server) emit(p *Policy, ev QueryEvent) {
 	if !p.LogQueries || p.LogMode == "off" {
 		return
 	}
-	important := ev.Action == "blocked" || ev.Action == "refused" || ev.Action == "failed"
+	important := ev.Action == "blocked" || ev.Action == "refused" || ev.Action == "failed" ||
+		ev.Action == "ratelimited" || ev.Action == "throttled"
 	if !important {
 		if p.LogMode == "important" {
 			return
@@ -330,8 +340,23 @@ func (s *Server) emit(p *Policy, ev QueryEvent) {
 // ServeDNS implements dns.Handler.
 func (s *Server) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 	p := s.policy.Load()
-	s.stats.total.Add(1)
 	client := clientAddr(w)
+	_, udp := w.RemoteAddr().(*net.UDPAddr)
+	if pr := &p.Protect; pr.RateLimit > 0 && !pr.exempt(client) {
+		if ok, first := s.limiter.allow(client, pr.RateLimit, pr.Burst, time.Now().UnixNano()); !ok {
+			// Dropped queries are not counted in Total: they get no answer.
+			s.stats.rateLimited.Add(1)
+			if first && len(req.Question) == 1 {
+				q := req.Question[0]
+				s.emit(p, QueryEvent{At: time.Now().UTC(), Client: client, Name: strings.TrimSuffix(strings.ToLower(q.Name), "."), Type: dns.TypeToString[q.Qtype], Action: "ratelimited"})
+			}
+			if !udp { // a TCP client is a real address: tell it
+				s.reply(w, req, dns.RcodeRefused)
+			}
+			return
+		}
+	}
+	s.stats.total.Add(1)
 	if len(req.Question) != 1 || req.Opcode != dns.OpcodeQuery {
 		s.reply(w, req, dns.RcodeFormatError)
 		return
@@ -344,6 +369,14 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 		ev.Action = "refused"
 		s.emit(p, ev)
 		s.reply(w, req, dns.RcodeRefused)
+		return
+	}
+	if q.Qtype == dns.TypeANY && udp && p.Protect.MinimalANY {
+		s.stats.local.Add(1)
+		s.stats.minimalANY.Add(1)
+		ev.Action = "local"
+		s.emit(p, ev)
+		_ = w.WriteMsg(minimalANY(req))
 		return
 	}
 	if rrs := p.Records.Lookup(q.Name); rrs != nil {
@@ -373,6 +406,19 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 		_ = w.WriteMsg(resp)
 		return
 	}
+	var zone string
+	if p.Protect.TortureThreshold > 0 {
+		zone = zoneOf(q.Name)
+		if now := time.Now().UnixNano(); !s.torture.allow(zone, &p.Protect, now) {
+			s.torture.count(zone, &p.Protect, now) // keeps the suspicion alive while the attack goes on
+			s.stats.throttled.Add(1)
+			s.stats.failed.Add(1)
+			ev.Action = "throttled"
+			s.emit(p, ev)
+			s.reply(w, req, dns.RcodeServerFailure)
+			return
+		}
+	}
 	t0 := time.Now()
 	resp, err, shared := s.flight.do(cacheKey(req), func() (*dns.Msg, error) { return s.forward(p, req) })
 	if shared {
@@ -383,6 +429,9 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 		s.stats.latN.Add(1)
 		if resp.Rcode == dns.RcodeNameError {
 			s.stats.nxdomain.Add(1)
+			if zone != "" && !shared && s.torture.count(zone, &p.Protect, time.Now().UnixNano()) {
+				log.Printf("dns: random-subdomain attack suspected on %s: limiting uncached lookups to %d/s", zone, p.Protect.TortureLimit)
+			}
 		}
 	}
 	if err != nil {
@@ -397,7 +446,7 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 	s.emit(p, ev)
 	s.cache.put(req, resp)
 	resp.Id = req.Id
-	if _, udp := w.RemoteAddr().(*net.UDPAddr); udp {
+	if udp {
 		size := uint16(dns.MinMsgSize)
 		if o := req.IsEdns0(); o != nil {
 			size = o.UDPSize()

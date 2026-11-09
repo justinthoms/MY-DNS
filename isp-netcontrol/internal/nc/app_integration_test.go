@@ -566,3 +566,61 @@ func TestIntegrationQueryLogModes(t *testing.T) {
 	e.call("PUT", "/api/dns/querylog/settings", map[string]any{"retention_hours": 24, "mode": "verbose"}, 400)
 	e.call("PUT", "/api/dns/querylog/settings", map[string]any{"retention_hours": 24, "mode": "all", "sample": 5000}, 400)
 }
+
+func TestIntegrationProtection(t *testing.T) {
+	e := newTestEnv(t)
+	got := e.call("GET", "/api/dns/protection", nil, 200)
+	set := got["settings"].(map[string]any)
+	if set["rate_limit"].(float64) != 500 || set["minimal_any"] != true || set["torture_enabled"] != true {
+		t.Fatalf("defaults %v", set)
+	}
+	e.call("PUT", "/api/dns/protection", map[string]any{"rate_limit_enabled": true, "rate_limit": 5, "burst": 5,
+		"torture_threshold": 1000, "torture_limit": 20, "torture_hold_minutes": 10}, 400)
+	e.call("PUT", "/api/dns/protection", map[string]any{"rate_limit_enabled": true, "rate_limit": 10, "burst": 10, "exempt": []string{"not-an-ip"},
+		"torture_threshold": 1000, "torture_limit": 20, "torture_hold_minutes": 10}, 400)
+	saved := e.call("PUT", "/api/dns/protection", map[string]any{"rate_limit_enabled": true, "rate_limit": 10, "burst": 10, "exempt": []string{"192.0.2.7", "10.1.2.3/8"},
+		"minimal_any": true, "torture_enabled": true, "torture_threshold": 1000, "torture_limit": 20, "torture_hold_minutes": 10}, 200)
+	if ex := saved["exempt"].([]any); ex[0] != "192.0.2.7/32" || ex[1] != "10.0.0.0/8" {
+		t.Fatalf("exempt not normalised: %v", ex)
+	}
+
+	// A flood from one client: most of it is dropped.
+	e.call("POST", "/api/dns/records", map[string]any{"name": "host.lan", "type": "A", "value": "10.0.0.1"}, 201)
+	c := &dns.Client{Timeout: 100 * time.Millisecond}
+	answered := 0
+	for i := 0; i < 40; i++ {
+		m := new(dns.Msg)
+		m.SetQuestion("host.lan.", dns.TypeA)
+		if _, _, err := c.Exchange(m, e.dns); err == nil {
+			answered++
+		}
+	}
+	if answered == 40 {
+		t.Fatal("rate limit did not drop anything")
+	}
+	st := e.call("GET", "/api/dns/protection", nil, 200)["status"].(map[string]any)
+	if st["rate_limited"].(float64) == 0 || len(st["limited_clients"].([]any)) != 1 {
+		t.Fatalf("status %v", st)
+	}
+	health := e.call("GET", "/api/system/health", nil, 200)["protection"].(map[string]any)
+	if health["rate_limited"].(float64) == 0 {
+		t.Fatalf("health %v", health)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for e.call("GET", "/api/dns/querylog?q=host.lan", nil, 200)["entries"] == nil ||
+		!strings.Contains(string(e.raw("GET", "/api/dns/querylog?q=host.lan", nil, 200)), `"ratelimited"`) {
+		if time.Now().After(deadline) {
+			t.Fatal("no ratelimited entry in the query log")
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	// Turning the limit off takes effect at once.
+	e.call("PUT", "/api/dns/protection", map[string]any{"rate_limit_enabled": false, "rate_limit": 10, "burst": 10,
+		"minimal_any": true, "torture_enabled": true, "torture_threshold": 1000, "torture_limit": 20, "torture_hold_minutes": 10}, 200)
+	for i := 0; i < 30; i++ {
+		e.query("host.lan", dns.TypeA)
+	}
+	if r := e.query("host.lan", dns.TypeANY); len(r.Answer) != 1 || r.Answer[0].Header().Rrtype != dns.TypeHINFO {
+		t.Fatalf("ANY: %v", r)
+	}
+}

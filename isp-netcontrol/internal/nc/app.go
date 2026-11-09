@@ -307,6 +307,8 @@ func (a *App) routes() *fiber.App {
 	p.Get("/dns/listen", a.getListen)
 	p.Put("/dns/listen", a.updateListen)
 	p.Put("/dns/settings", a.updateDNSSettings)
+	p.Get("/dns/protection", a.getProtection)
+	p.Put("/dns/protection", a.updateProtection)
 	p.Get("/dns/stats", a.dnsStats)
 	p.Get("/dns/timeseries", a.timeseries)
 	p.Get("/dns/breakdown", a.requireFeature("query-log"), a.breakdown)

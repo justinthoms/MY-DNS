@@ -8,9 +8,9 @@ import { Alert, LicenseRequired, Shell, useAction, useLoad } from "@/components/
 type Entry = { at: string; client: string; name: string; type: string; action: string };
 type Page = { entries: Entry[]; total: number; page: number; pages: number; page_size: number; retention_hours: number; mode: "all" | "important" | "off"; sample: number; dropped: number };
 
-const TABS: [string, string][] = [["", "All"], ["blocked", "Blocked"], ["refused", "Refused"], ["failed", "Failed"], ["local", "Local"], ["cached", "Cached"], ["forwarded", "Forwarded"]];
+const TABS: [string, string][] = [["", "All"], ["blocked", "Blocked"], ["refused", "Refused"], ["failed", "Failed"], ["local", "Local"], ["cached", "Cached"], ["forwarded", "Forwarded"], ["ratelimited", "Rate limited"], ["throttled", "Attack"]];
 const RETENTION: [number, string][] = [[1, "1 hour"], [6, "6 hours"], [12, "12 hours"], [24, "24 hours"], [72, "3 days"], [168, "7 days"], [720, "30 days"]];
-const tone = (a: string) => (a === "blocked" ? "bad" : a === "refused" || a === "failed" ? "warn" : a === "local" ? "ok" : "muted");
+const tone = (a: string) => (a === "blocked" || a === "ratelimited" || a === "throttled" ? "bad" : a === "refused" || a === "failed" ? "warn" : a === "local" ? "ok" : "muted");
 
 function pageList(page: number, pages: number): (number | "…")[] {
   const out: (number | "…")[] = [];
