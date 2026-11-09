@@ -99,6 +99,21 @@ if [ "$DNS_PORT" = 53 ] && command -v ss >/dev/null; then
       [ -L /etc/resolv.conf ] && readlink /etc/resolv.conf >"$STATE_DIR.resolv-link.bak" 2>/dev/null || true
       ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf
       systemctl restart systemd-resolved
+      sleep 1
+      # Without the stub, this server resolves names through the upstream
+      # servers systemd-resolved knows about. Make sure there are some.
+      if ! grep -q '^nameserver' /run/systemd/resolve/resolv.conf 2>/dev/null || ! getent hosts registry-1.docker.io >/dev/null; then
+        rm -f /etc/systemd/resolved.conf.d/isp-netcontrol.conf
+        ln -sf "$(cat "$STATE_DIR.resolv-link.bak" 2>/dev/null || echo ../run/systemd/resolve/stub-resolv.conf)" /etc/resolv.conf
+        systemctl restart systemd-resolved
+        die "this server has no upstream DNS servers configured outside the systemd-resolved stub, so it could not
+       resolve names after the stub was turned off (the change has been undone). Configure DNS servers, e.g. in
+       /etc/systemd/resolved.conf.d/upstream.conf:  [Resolve]  DNS=1.1.1.1 8.8.8.8  then: systemctl restart systemd-resolved
+       and run the installer again."
+      fi
+      # The Docker daemon still holds the old stub address (127.0.0.53): restart it.
+      systemctl restart docker
+      for _ in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done
     fi
   fi
   OTHER="$(ss -lunpH 'sport = :53' 2>/dev/null | grep -v isp-netcontrol || true)"
@@ -185,6 +200,17 @@ fi
 
 # ---- Build and start --------------------------------------------------------
 cd "$DEPLOY"
+# Docker must be able to download base images. A daemon started before the
+# resolver changed keeps using the old address; one restart fixes that.
+if ! docker pull -q alpine:3.22 >/dev/null 2>&1; then
+  if [ -d /run/systemd/system ]; then
+    say "Docker cannot reach the image registry; restarting Docker and retrying"
+    systemctl restart docker
+    for _ in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done
+  fi
+  docker pull -q alpine:3.22 >/dev/null || die "Docker cannot download images from registry-1.docker.io.
+       Check this server's DNS (getent hosts registry-1.docker.io) and internet access, then run the installer again."
+fi
 say "Building images (this takes a few minutes the first time)"
 docker compose build
 say "Starting services"
