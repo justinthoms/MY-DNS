@@ -384,3 +384,40 @@ func TestIntegrationQueryLogPaging(t *testing.T) {
 		t.Fatalf("after 12h retention: total=%v retention=%v", after["total"], after["retention_hours"])
 	}
 }
+
+func TestIntegrationAnycastGuards(t *testing.T) {
+	e := newTestEnv(t)
+	base := map[string]any{"interface": "lo", "enabled": true, "monitor_only": true, "interval_sec": 5,
+		"fail_threshold": 3, "rise_threshold": 3, "mode": "auto", "check_name": "example.com"}
+	with := func(k string, v any) map[string]any {
+		m := map[string]any{}
+		for a, b := range base {
+			m[a] = b
+		}
+		m[k] = v
+		return m
+	}
+	if r := e.call("PUT", "/api/anycast", base, 400); !strings.Contains(fmt.Sprint(r["error"]), "loopback") {
+		t.Fatalf("loopback: %v", r)
+	}
+	e.call("PUT", "/api/anycast", with("interface", "no-such-if0"), 400)
+	e.call("PUT", "/api/anycast", with("interval_sec", 1), 400)
+	e.call("PUT", "/api/anycast", with("check_name", "not a name!"), 400)
+	// The interface carrying the default route is refused, if this host has one.
+	for name := range defaultRouteIfaces() {
+		if r := e.call("PUT", "/api/anycast", with("interface", name), 400); !strings.Contains(fmt.Sprint(r["error"]), "default route") {
+			t.Fatalf("default-route interface %s: %v", name, r)
+		}
+		break
+	}
+	// Disabled settings are stored without touching any interface.
+	off := with("enabled", false)
+	off["interface"] = "anycast0"
+	off["fail_threshold"] = 4
+	e.call("PUT", "/api/anycast", off, 200)
+	g := e.call("GET", "/api/anycast", nil, 200)
+	s := g["settings"].(map[string]any)
+	if s["fail_threshold"].(float64) != 4 || s["enabled"] != false || g["status"].(map[string]any)["enabled"] != false {
+		t.Fatalf("stored: %v", g)
+	}
+}

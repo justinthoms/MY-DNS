@@ -386,3 +386,32 @@ func (s *Server) forward(p *Policy, req *dns.Msg) (*dns.Msg, error) {
 	}
 	return nil, lastErr
 }
+
+// Probe checks that the resolver can answer: it must be listening and an
+// upstream must resolve name (the cache is bypassed). Used by the anycast
+// health check.
+func (s *Server) Probe(ctx context.Context, name string) error {
+	if len(s.Addrs()) == 0 {
+		return errors.New("DNS is not listening")
+	}
+	m := new(dns.Msg)
+	m.SetQuestion(dns.Fqdn(name), dns.TypeA)
+	type res struct {
+		r   *dns.Msg
+		err error
+	}
+	ch := make(chan res, 1)
+	go func() { r, err := s.forward(s.policy.Load(), m); ch <- res{r, err} }()
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("no answer for %s: %w", name, ctx.Err())
+	case x := <-ch:
+		if x.err != nil {
+			return fmt.Errorf("upstream: %w", x.err)
+		}
+		if x.r.Rcode != dns.RcodeSuccess && x.r.Rcode != dns.RcodeNameError {
+			return fmt.Errorf("upstream answered %s for %s", dns.RcodeToString[x.r.Rcode], name)
+		}
+		return nil
+	}
+}

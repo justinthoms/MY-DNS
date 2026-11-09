@@ -16,6 +16,7 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/justinthoms/my-dns/isp-netcontrol/internal/anycast"
 	"github.com/justinthoms/my-dns/isp-netcontrol/internal/dnsserver"
 	"github.com/justinthoms/my-dns/isp-netcontrol/internal/firewall"
 	"github.com/justinthoms/my-dns/isp-netcontrol/internal/license"
@@ -111,6 +112,8 @@ type App struct {
 	enforced  string // license mode + features last enforced
 
 	stats statsRecorder
+
+	anycast *anycast.Monitor
 }
 
 type fwState struct {
@@ -158,6 +161,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		return nil, err
 	}
 	a.dns = dnsserver.New(pol)
+	a.anycast = a.newAnycastMonitor()
 	a.web = a.routes()
 	return a, nil
 }
@@ -215,19 +219,22 @@ func (a *App) Run(ctx context.Context) error {
 	go a.statsWriter(ctx)
 	go a.sourceRefresher(ctx)
 	go a.listenWatcher(ctx)
+	anycastDone := a.startAnycast(ctx)
 
+	var runErr error
 	select {
 	case <-ctx.Done():
-	case err := <-errc:
-		if err != nil {
-			_ = a.web.Shutdown()
-			a.dns.Shutdown()
-			return err
-		}
+	case runErr = <-errc:
+	}
+	cancel()
+	// Let the anycast monitor withdraw the routes before DNS stops.
+	select {
+	case <-anycastDone:
+	case <-time.After(3 * time.Second):
 	}
 	_ = a.web.Shutdown()
 	a.dns.Shutdown()
-	return nil
+	return runErr
 }
 
 // Close releases the database.
@@ -279,6 +286,8 @@ func (a *App) routes() *fiber.App {
 	p.Put("/license/settings", a.updateLicenseSettings)
 
 	p.Get("/dns/settings", a.getDNSSettings)
+	p.Get("/anycast", a.getAnycast)
+	p.Put("/anycast", a.updateAnycast)
 	p.Get("/dns/listen", a.getListen)
 	p.Put("/dns/listen", a.updateListen)
 	p.Put("/dns/settings", a.updateDNSSettings)

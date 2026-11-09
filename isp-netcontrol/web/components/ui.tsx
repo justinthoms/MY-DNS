@@ -12,6 +12,7 @@ const NAV = [
   { href: "/querylog", label: "Query log" },
   { href: "/firewall", label: "Firewall" },
   { href: "/settings", label: "DNS settings" },
+  { href: "/anycast", label: "Anycast" },
   { href: "/license", label: "License" },
   { href: "/audit", label: "Audit log" },
 ];
