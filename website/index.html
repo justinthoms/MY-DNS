@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ISP NetControl · DNS for ISPs</title>
+<meta name="description" content="A fast, filtering DNS resolver for Internet service providers: attack protection, DNSSEC, DNS over TLS and HTTPS, anycast and a NOC dashboard. Install on Ubuntu 24.04 with one command.">
+<meta property="og:title" content="ISP NetControl · DNS for ISPs">
+<meta property="og:description" content="Fast, filtering DNS for ISPs. One-command install on Ubuntu 24.04.">
+<meta property="og:image" content="https://dns.netfixpro.in/img/dashboard.webp">
+<meta name="theme-color" content="#0a1120">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<style>
+  :root {
+    --bg: #0a1120; --bg2: #0d1628; --panel: #111b30; --panel2: #16223b; --border: #1f2c48;
+    --text: #e8edf7; --muted: #94a3bf; --accent: #3b82f6; --accent2: #60a5fa; --ok: #34d399; --warn: #fbbf24; --bad: #f87171;
+    --mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, "Inter", sans-serif; -webkit-font-smoothing: antialiased; }
+  a { color: var(--accent2); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap { max-width: 1140px; margin: 0 auto; padding: 0 20px; }
+
+  /* Header */
+  header { position: sticky; top: 0; z-index: 10; background: rgba(10,17,32,.85); backdrop-filter: blur(10px); border-bottom: 1px solid var(--border); }
+  header .wrap { display: flex; align-items: center; justify-content: space-between; height: 62px; gap: 16px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; color: var(--text); letter-spacing: -.01em; }
+  .brand:hover { text-decoration: none; }
+  .brand small { color: var(--muted); font-weight: 500; }
+  nav { display: flex; gap: 22px; font-size: 15px; }
+  nav a { color: var(--muted); }
+  nav a:hover { color: var(--text); text-decoration: none; }
+  .btn { display: inline-flex; align-items: center; gap: 8px; padding: 10px 18px; border-radius: 10px; background: var(--accent); color: #fff; font-weight: 600; font-size: 15px; border: 0; cursor: pointer; }
+  .btn:hover { background: #2f74e6; text-decoration: none; }
+  .btn.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
+  .btn.ghost:hover { background: var(--panel); }
+
+  /* Hero */
+  .hero { position: relative; padding: 84px 0 56px; text-align: center; overflow: hidden; }
+  .hero::before { content: ""; position: absolute; inset: -40% -20% auto; height: 640px; background: radial-gradient(closest-side, rgba(59,130,246,.22), transparent 70%); pointer-events: none; }
+  .pill { position: relative; display: inline-flex; gap: 8px; align-items: center; padding: 5px 14px; border: 1px solid var(--border); border-radius: 999px; background: var(--panel); color: var(--muted); font-size: 13.5px; }
+  .pill b { color: var(--ok); font-weight: 600; }
+  h1 { position: relative; font-size: clamp(34px, 6vw, 60px); line-height: 1.08; letter-spacing: -.03em; margin: 22px auto 18px; max-width: 880px; }
+  h1 span { background: linear-gradient(90deg, #60a5fa, #a78bfa); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .lead { position: relative; color: var(--muted); font-size: clamp(17px, 2.2vw, 20px); max-width: 720px; margin: 0 auto 36px; }
+
+  /* Install box */
+  .install { position: relative; max-width: 760px; margin: 0 auto; text-align: left; }
+  .install .label { display: flex; justify-content: space-between; align-items: center; font-size: 13.5px; color: var(--muted); margin-bottom: 8px; }
+  .term { display: flex; align-items: stretch; background: #060b16; border: 1px solid #2a3a5e; border-radius: 12px; overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,.45), 0 0 0 4px rgba(59,130,246,.08); }
+  .term code { flex: 1; min-width: 0; padding: 17px 18px; font: 15.5px/1.4 var(--mono); color: #e2e8f0; white-space: nowrap; overflow-x: auto; scrollbar-width: thin; }
+  .term code .p { color: var(--ok); user-select: none; }
+  .term code .u { color: var(--accent2); }
+  .copy { flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 0 20px; border: 0; border-left: 1px solid #2a3a5e; background: var(--accent); color: #fff; font: 600 15px system-ui, sans-serif; cursor: pointer; transition: background .15s; }
+  .copy:hover { background: #2f74e6; }
+  .copy.done { background: #059669; }
+  .copy svg { width: 18px; height: 18px; }
+  .install .note { color: var(--muted); font-size: 14px; margin: 12px 2px 0; }
+  .install .note code { font-family: var(--mono); font-size: 13px; color: var(--text); background: var(--panel); padding: 1px 6px; border-radius: 5px; }
+
+  /* Stats */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin: 56px auto 0; max-width: 960px; }
+  .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px 16px; text-align: center; }
+  .stat b { display: block; font-size: 28px; letter-spacing: -.02em; }
+  .stat span { color: var(--muted); font-size: 13.5px; }
+
+  /* Sections */
+  section { padding: 72px 0; }
+  section.alt { background: var(--bg2); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+  h2 { font-size: clamp(26px, 3.6vw, 38px); letter-spacing: -.02em; line-height: 1.15; margin: 0 0 12px; text-align: center; }
+  .sub { color: var(--muted); text-align: center; max-width: 660px; margin: 0 auto 44px; font-size: 17px; }
+
+  .shot { border-radius: 14px; border: 1px solid var(--border); overflow: hidden; background: var(--panel); box-shadow: 0 30px 80px rgba(0,0,0,.5); }
+  .shot img { display: block; width: 100%; height: auto; }
+  .shots { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 18px; }
+  .shots figure { margin: 0; }
+  .shots figcaption { color: var(--muted); font-size: 14px; margin-top: 10px; text-align: center; }
+  .shots .shot { aspect-ratio: 16 / 11; }
+  .shots .shot img { height: 100%; object-fit: cover; object-position: top left; }
+
+  .features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 22px; min-width: 0; }
+  .grid2 > *, .features > *, .steps > *, .shots > *, .stats > * { min-width: 0; }
+  .card .ic { width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center; background: rgba(59,130,246,.14); color: var(--accent2); margin-bottom: 14px; }
+  .card .ic svg { width: 21px; height: 21px; }
+  .card h3 { margin: 0 0 6px; font-size: 18px; letter-spacing: -.01em; }
+  .card p { margin: 0; color: var(--muted); font-size: 15px; }
+
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; counter-reset: s; }
+  .step { position: relative; background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 24px 22px 22px; }
+  .step::before { counter-increment: s; content: counter(s); display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: var(--accent); color: #fff; font-weight: 700; margin-bottom: 14px; }
+  .step h3 { margin: 0 0 6px; font-size: 18px; }
+  .step p { margin: 0; color: var(--muted); font-size: 15px; }
+
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .list { margin: 0; padding: 0; list-style: none; }
+  .list li { position: relative; padding: 7px 0 7px 28px; color: var(--muted); border-bottom: 1px solid var(--border); font-size: 15px; }
+  .list li:last-child { border-bottom: 0; }
+  .list li::before { content: ""; position: absolute; left: 2px; top: 13px; width: 14px; height: 8px; border-left: 2px solid var(--ok); border-bottom: 2px solid var(--ok); transform: rotate(-45deg); }
+  .list li b { color: var(--text); font-weight: 600; }
+  pre.cmd { margin: 8px 0 14px; padding: 12px 14px; background: #060b16; border: 1px solid var(--border); border-radius: 10px; font: 13.5px/1.5 var(--mono); color: #e2e8f0; overflow-x: auto; }
+  .card h3 + pre.cmd { margin-top: 10px; }
+
+  .cta { text-align: center; }
+  .cta .install { margin-top: 26px; }
+
+  footer { border-top: 1px solid var(--border); padding: 30px 0 40px; color: var(--muted); font-size: 14px; }
+  footer .wrap { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+
+  @media (max-width: 900px) {
+    .features, .steps, .shots { grid-template-columns: 1fr 1fr; }
+    .stats { grid-template-columns: 1fr 1fr; }
+  }
+  @media (max-width: 640px) {
+    nav { display: none; }
+    .features, .steps, .shots, .grid2 { grid-template-columns: 1fr; }
+    .hero { padding-top: 56px; }
+    .term code { font-size: 13.5px; padding: 15px 14px; }
+    .copy { padding: 0 14px; }
+    .copy .t { display: none; }
+    .install .label span:last-child { display: none; }
+    section { padding: 56px 0; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <a class="brand" href="#top">
+      <svg width="28" height="28" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#3b82f6"/><path d="M9 22V10l14 12V10" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      ISP NetControl <small>by NetFix Pro</small>
+    </a>
+    <nav aria-label="Sections">
+      <a href="#features">Features</a>
+      <a href="#screens">Screens</a>
+      <a href="#install">Install</a>
+      <a href="https://github.com/justinthoms/MY-DNS">GitHub</a>
+    </nav>
+    <a class="btn" href="#install">Install</a>
+  </div>
+</header>
+
+<main id="top">
+  <div class="hero">
+    <div class="wrap">
+      <div class="pill"><b>●</b> v1.4: built-in Unbound, attack protection, encrypted DNS</div>
+      <h1>The DNS server <span>built for ISPs</span></h1>
+      <p class="lead">Fast, filtering DNS for your subscribers, with DNSSEC, attack protection, DNS over TLS and HTTPS, anycast and a live NOC dashboard. Install it on Ubuntu 24.04 with one command.</p>
+
+      <div class="install">
+        <div class="label"><span>Ubuntu 24.04 · install or upgrade</span><span>run as a user with sudo</span></div>
+        <div class="term">
+          <code id="cmd"><span class="p">$ </span>curl -fsSL <span class="u">https://dns.netfixpro.in/install.sh</span> | sudo bash</code>
+          <button class="copy" type="button" data-copy="curl -fsSL https://dns.netfixpro.in/install.sh | sudo bash" aria-label="Copy the install command">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+            <span class="t">Copy</span>
+          </button>
+        </div>
+        <p class="note">Asks for your administrator e-mail, then installs Docker, PostgreSQL, Unbound and the console. Re-run it any time to upgrade; your settings and data are kept.</p>
+      </div>
+
+      <div class="stats">
+        <div class="stat"><b>110k</b><span>cached answers per second*</span></div>
+        <div class="stat"><b>7 ms</b><span>median forwarded answer*</span></div>
+        <div class="stat"><b>DNSSEC</b><span>validating resolver built in</span></div>
+        <div class="stat"><b>DoT · DoH</b><span>encrypted DNS for subscribers</span></div>
+      </div>
+    </div>
+  </div>
+
+  <section id="screens" class="alt">
+    <div class="wrap">
+      <h2>See your whole network's DNS at a glance</h2>
+      <p class="sub">A NOC dashboard with live query rate, response time, blocked categories, top domains and clients, upstream and system health.</p>
+      <div class="shot"><img src="img/dashboard.webp" width="1600" height="1488" alt="ISP NetControl dashboard: query rate, result distribution, top domains, response time, query types, blocked categories and system health" loading="eager"></div>
+      <div class="shots">
+        <figure><div class="shot"><img src="img/protection.webp" alt="Attack protection page showing a domain under random-subdomain attack and a rate-limited client" loading="lazy"></div><figcaption>Attack protection</figcaption></figure>
+        <figure><div class="shot"><img src="img/settings.webp" alt="DNS settings with upstream resolvers and encrypted DNS for subscribers" loading="lazy"></div><figcaption>DNS settings and encrypted DNS</figcaption></figure>
+        <figure><div class="shot"><img src="img/querylog.webp" alt="Query log with filters for blocked, refused, failed and cached queries" loading="lazy"></div><figcaption>Searchable query log</figcaption></figure>
+      </div>
+    </div>
+  </section>
+
+  <section id="features">
+    <div class="wrap">
+      <h2>Everything an ISP resolver needs</h2>
+      <p class="sub">One server, one console. Every feature below is in the box.</p>
+      <div class="features">
+        <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg></div><h3>Fast under load</h3><p>Sharded cache, one socket per CPU core and merged duplicate lookups keep answers in microseconds during peak hours.</p></div>
+        <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg></div><h3>Own recursive resolver</h3><p>Built-in Unbound resolves from the root servers with DNSSEC validation, prefetching and serve-stale. No dependency on Google or Cloudflare.</p></div>
+        <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div><h3>Attack protection</h3><p>Per-client rate limiting, minimal ANY answers against amplification, and automatic detection of random-subdomain (water torture) attacks.</p></div>
+        <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></div><h3>Encrypted DNS</h3><p>DNS over TLS for Android Private DNS and routers, DNS over HTTPS for browsers and Windows, and encrypted upstream resolvers.</p></div>
+        <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/></svg></div><h3>Filtering</h3><p>Block and allow lists with categories, daily list subscriptions from a URL, NXDOMAIN or sinkhole answers, and import or export as hosts files or CSV.</p></div>
+        <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><path d="M12 7v4M12 11 5 17M12 11l7 6"/></svg></div><h3>Anycast ready</h3><p>Health checks withdraw this server's routes (iBGP, OSPF, IS-IS via FRR) when DNS fails and announce them again on recovery.</p></div>
+        <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg></div><h3>Local DNS records</h3><p>A, AAAA, CNAME, TXT, MX and PTR records with wildcards, for internal hosts, overrides and reverse lookups.</p></div>
+        <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 5-6"/></svg></div><h3>Query log and statistics</h3><p>Search every query by domain or client, export CSV, keep logs from 1 hour to 90 days, and sample on very busy servers.</p></div>
+        <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></div><h3>Secure console</h3><p>Mandatory two-factor sign-in, several administrators, an audit log of every change, and an nftables firewall manager.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="install" class="alt">
+    <div class="wrap">
+      <h2>Up and running in minutes</h2>
+      <p class="sub">A fresh Ubuntu 24.04 server. We recommend at least 2 CPU cores, 4 GB RAM and 20 GB of disk, and more cores for large networks.</p>
+      <div class="steps">
+        <div class="step"><h3>Run the installer</h3><p>Paste the command on your server. Enter the administrator e-mail when asked. The installer prints the console address and an initial password.</p></div>
+        <div class="step"><h3>Sign in</h3><p>Open the console in your browser, set your password and scan the two-factor QR code with any authenticator app.</p></div>
+        <div class="step"><h3>Go live</h3><p>A 30-day trial with every feature starts at once. Add your subscriber networks, activate your license and point your customers at the server.</p></div>
+      </div>
+
+      <div class="grid2" style="margin-top: 16px">
+        <div class="card">
+          <h3>Options</h3>
+          <p>Add options after <code style="font-family:var(--mono);font-size:13px">bash -s --</code>. For example, your own hostname and certificate (needed for encrypted DNS on phones):</p>
+          <pre class="cmd">curl -fsSL https://dns.netfixpro.in/install.sh | sudo bash -s -- \
+  --domain dns.your-isp.example \
+  --tls-cert /etc/letsencrypt/live/dns.your-isp.example/fullchain.pem \
+  --tls-key /etc/letsencrypt/live/dns.your-isp.example/privkey.pem</pre>
+          <p>Serve DNS on specific addresses only:</p>
+          <pre class="cmd">curl -fsSL https://dns.netfixpro.in/install.sh | sudo bash -s -- --dns-listen 203.0.113.10:53</pre>
+          <p>Without the Unbound resolver: put <code style="font-family:var(--mono);font-size:13px">NO_UNBOUND=1</code> after <code style="font-family:var(--mono);font-size:13px">sudo</code>.</p>
+        </div>
+        <div class="card">
+          <h3>What the installer does</h3>
+          <ul class="list">
+            <li>Installs <b>Docker</b> and downloads the source from GitHub</li>
+            <li>Frees port 53 from systemd-resolved (your server still resolves names)</li>
+            <li>Sets up <b>Unbound</b> on 127.0.0.1:5335, sized for your CPU and memory</li>
+            <li>Starts <b>PostgreSQL 16</b>, the DNS server and the HTTPS console</li>
+            <li>Schedules daily database backups</li>
+            <li>Never touches your existing firewall rules</li>
+          </ul>
+          <p style="margin-top:12px">Upgrading is the same command. Want to read it first? <a href="install.sh">View install.sh</a>.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="cta">
+    <div class="wrap">
+      <h2>Give your subscribers faster, safer DNS</h2>
+      <p class="sub" style="margin-bottom:0">Try every feature free for 30 days. No card, no sign-up.</p>
+      <div class="install">
+        <div class="term">
+          <code><span class="p">$ </span>curl -fsSL <span class="u">https://dns.netfixpro.in/install.sh</span> | sudo bash</code>
+          <button class="copy" type="button" data-copy="curl -fsSL https://dns.netfixpro.in/install.sh | sudo bash" aria-label="Copy the install command">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+            <span class="t">Copy</span>
+          </button>
+        </div>
+      </div>
+      <p style="margin-top:28px"><a class="btn ghost" href="https://github.com/justinthoms/MY-DNS">Documentation on GitHub</a></p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>© NetFix Pro · ISP NetControl</span>
+    <span>* Measured on 4 shared CPU cores with 200 concurrent clients.</span>
+  </div>
+</footer>
+
+<script>
+  // One-click copy, with a fallback for browsers without the Clipboard API.
+  document.querySelectorAll(".copy").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var text = btn.getAttribute("data-copy");
+      var done = function () {
+        var label = btn.querySelector(".t");
+        btn.classList.add("done");
+        if (label) label.textContent = "Copied";
+        setTimeout(function () { btn.classList.remove("done"); if (label) label.textContent = "Copy"; }, 2000);
+      };
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(done, fallback);
+      } else {
+        fallback();
+      }
+      function fallback() {
+        var ta = document.createElement("textarea");
+        ta.value = text; ta.setAttribute("readonly", ""); ta.style.position = "fixed"; ta.style.opacity = "0";
+        document.body.appendChild(ta); ta.select();
+        try { document.execCommand("copy"); done(); } catch (e) {}
+        document.body.removeChild(ta);
+      }
+    });
+  });
+</script>
+</body>
+</html>

@@ -291,15 +291,15 @@ export default function Dashboard() {
           <div className="panel-head"><h2>Upstream resolvers</h2><Link href="/settings">Settings ›</Link></div>
           {health ? (
             <div className="table-wrap">
-              <table>
+              <table className="compact">
                 <thead><tr><th>Resolver</th><th>Status</th><th style={{ textAlign: "right" }}>Avg</th><th style={{ textAlign: "right" }}>Failures</th></tr></thead>
                 <tbody>
                   {health.upstreams.map((u) => (
                     <tr key={u.addr} title={u.last_error ?? ""}>
                       <td className="mono nowrap">{u.addr}</td>
-                      <td>{u.healthy == null ? <Status level="off" text="No queries yet" /> : u.healthy ? <Status level="good" text="Answering" /> : <Status level="critical" text="Failing" />}</td>
+                      <td className="nowrap" title={u.healthy == null ? "No queries yet" : u.healthy ? "Answering" : "Failing"}>{u.healthy == null ? <Status level="off" text="Idle" /> : u.healthy ? <Status level="good" text="OK" /> : <Status level="critical" text="Down" />}</td>
                       <td className="num nowrap" style={{ textAlign: "right" }}>{u.avg_ms ? msFmt(u.avg_ms) : "—"}</td>
-                      <td className="num" style={{ textAlign: "right" }}>{num(u.failures)} / {num(u.queries)}</td>
+                      <td className="num nowrap" style={{ textAlign: "right" }} title={`${num(u.failures)} failed of ${num(u.queries)} queries`}>{num(u.failures)}</td>
                     </tr>
                   ))}
                 </tbody>
