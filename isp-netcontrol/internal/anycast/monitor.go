@@ -149,7 +149,7 @@ func (m *Monitor) Status() Status {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	st := m.st
-	st.Events = append([]Event(nil), m.st.Events...)
+	st.Events = append([]Event{}, m.st.Events...) // never nil: the console reads .length
 	if up, err := m.link.IsUp(m.cfg.Interface); err == nil {
 		st.LinkUp = up
 	}

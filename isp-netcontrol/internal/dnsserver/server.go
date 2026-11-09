@@ -248,7 +248,7 @@ func closeServers(list []*dns.Server) {
 func (s *Server) Addrs() []string {
 	s.lmu.Lock()
 	defer s.lmu.Unlock()
-	return append([]string(nil), s.addrs...)
+	return append([]string{}, s.addrs...) // never nil (JSON [] not null)
 }
 
 // ListenAndServe listens on addrs until ctx is cancelled.

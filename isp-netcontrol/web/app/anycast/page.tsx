@@ -94,11 +94,11 @@ export default function AnycastPage() {
 
       <div className="panel table-wrap">
         <h2>Recent events</h2>
-        {st.events.length === 0 ? <p className="muted">None yet.</p> : (
+        {!st.events?.length ? <p className="muted">None yet.</p> : (
           <table>
             <thead><tr><th>Time</th><th>Event</th><th>Details</th></tr></thead>
             <tbody>
-              {[...st.events].reverse().map((e, i) => (
+              {[...(st.events ?? [])].reverse().map((e, i) => (
                 <tr key={i}><td style={{ whiteSpace: "nowrap" }}>{fmtTime(e.at)}</td><td><span className={`badge ${kindTone(e.kind)}`}>{e.kind.replace("_", " ")}</span></td><td>{e.message}</td></tr>
               ))}
             </tbody>

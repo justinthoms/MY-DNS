@@ -2,6 +2,7 @@ package anycast
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -172,5 +173,15 @@ func TestSysLinkInNetns(t *testing.T) {
 	cmd.Env = append(os.Environ(), "ANYCAST_NETNS_CHILD=1")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("child: %v\n%s", err, out)
+	}
+}
+
+// A monitor with no events yet must report an empty list, not null: the
+// console's Anycast page reads events.length.
+func TestStatusEventsNeverNull(t *testing.T) {
+	m := New(&fakeLink{up: map[string]bool{}}, (&fakeProbe{}).probe, nil)
+	b, _ := json.Marshal(m.Status())
+	if !strings.Contains(string(b), `"events":[]`) {
+		t.Fatalf("status JSON %s", b)
 	}
 }

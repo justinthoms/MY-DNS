@@ -159,3 +159,11 @@ func TestParseTLSUpstream(t *testing.T) {
 		t.Error("hostname accepted")
 	}
 }
+
+// Not listening must read as an empty list (the dashboard joins it).
+func TestAddrsNeverNil(t *testing.T) {
+	s := New(&Policy{})
+	if s.Addrs() == nil || s.TLSAddrs() == nil {
+		t.Fatal("nil address list")
+	}
+}

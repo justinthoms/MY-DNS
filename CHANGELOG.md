@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.4.1 (2026-11-09)
+
+### Fixed
+- The Anycast page showed "Application error" until the first health-check
+  event (the event list was sent as `null`).
+- The dashboard could fail the same way while DNS was not listening.
+
 ## v1.4.0 (2026-11-09)
 
 ### New

@@ -53,7 +53,7 @@ func (s *Server) ListenTLS(addrs []string, cfg *tls.Config) error {
 func (s *Server) TLSAddrs() []string {
 	s.tlsMu.Lock()
 	defer s.tlsMu.Unlock()
-	return append([]string(nil), s.tlsAddrs...)
+	return append([]string{}, s.tlsAddrs...)
 }
 
 // ---- DNS over HTTPS (RFC 8484) for clients ---------------------------------
