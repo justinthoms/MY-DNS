@@ -82,6 +82,45 @@ sudo docker compose -f /opt/isp-netcontrol/src/isp-netcontrol/deploy/docker-comp
 next sign-in; `reset-2fa` removes two-factor authentication so it is set up
 again. Both end the user's sessions and are recorded in the audit log.
 
+## Recursive resolver (Unbound)
+
+By default ISP NetControl forwards the queries it cannot answer itself to
+public resolvers (1.1.1.1 and 8.8.8.8). With `--with-unbound` the installer
+sets up Unbound on the same server instead:
+
+- it listens only on `127.0.0.1:5335` (never on port 53, never to the
+  internet), so it serves only ISP NetControl;
+- it resolves from the root servers and validates **DNSSEC** (forged
+  answers become SERVFAIL);
+- threads and cache are sized from the server's CPUs and memory
+  (at most 8 threads; message cache RAM/16, 64 MB to 1 GB; record cache
+  twice that), with prefetching and serve-expired (popular names are
+  refreshed before they expire, and stale answers are served for up to a
+  day if the authoritative servers are unreachable).
+
+On a new installation, ISP NetControl uses Unbound automatically. On an
+existing installation the saved upstreams are kept: set **DNS settings →
+Upstream resolvers** to `127.0.0.1:5335` to switch. Keep a public resolver
+as a second upstream if you want a fallback.
+
+The configuration is `/etc/unbound/unbound.conf.d/isp-netcontrol.conf`;
+re-running the installer rewrites it. Check Unbound:
+
+```bash
+systemctl status unbound
+```
+
+```bash
+dig @127.0.0.1 -p 5335 example.com
+```
+
+```bash
+dig @127.0.0.1 -p 5335 dnssec-failed.org
+```
+
+The last one must return `SERVFAIL` (that domain is deliberately signed
+wrongly). Unbound needs outbound UDP and TCP port 53 to the internet.
+
 ## Query log retention
 
 **Query log → Keep queries for** sets how long queries are kept (1 hour to
@@ -126,6 +165,11 @@ installer with `--lm-ca <its CA certificate>`.
 
 **DNS: clients get REFUSED**
 Their address is not in **DNS settings → Allowed client networks**.
+
+**DNS: SERVFAIL for every name with Unbound**
+Check `systemctl status unbound` and that the server can reach the
+internet on UDP and TCP port 53 (`dig @198.41.0.4 . NS`). A wrong system
+clock also breaks DNSSEC validation: check `timedatectl`.
 
 **DNS: SERVFAIL for every name**
 No upstream resolver answers. Check **DNS settings → Upstream resolvers**

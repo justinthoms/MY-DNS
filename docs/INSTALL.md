@@ -56,6 +56,7 @@ Useful options:
 | `--lm-ca FILE` | The license server's CA certificate, if it is self-signed. |
 | `--dns-listen ADDRS` | Where to serve DNS. Default `:53` (all addresses). Example: `203.0.113.10:53,[2001:db8::10]:53`. |
 | `--tls-cert/--tls-key` | Your own console certificate (default: self-signed). |
+| `--with-unbound` | Install **Unbound** on `127.0.0.1:5335` as the recursive resolver (answers from the root servers, DNSSEC validation, no dependency on Google or Cloudflare). Recommended. See [OPERATIONS.md](OPERATIONS.md#recursive-resolver-unbound). |
 | `--no-firewall` | Do not manage nftables at all. |
 | `--keep-resolved-stub` | Do not touch systemd-resolved (then use `--dns-listen` with specific addresses). |
 | `--http-port/--https-port` | Console ports (default 80/443). |

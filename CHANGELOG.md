@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### New
+- **Built-in recursive resolver**: `install.sh --with-unbound` installs
+  Unbound on 127.0.0.1:5335, sized for the server, with DNSSEC
+  validation, prefetching and serve-expired, and makes it the default
+  upstream. `NC_DEFAULT_UPSTREAMS` sets the default upstreams.
+- **Query log modes**: log every query, only blocked/refused/failed ones,
+  or nothing; allowed queries can be sampled (1 in 10, 100 or 1000).
+  The console warns if log entries were dropped under load.
+- `dnsbench`: load generator and stand-in upstream for capacity tests.
+
+### Faster
+- Sharded answer cache with bounded eviction (`NC_CACHE_SIZE`, default
+  100,000 answers), one UDP socket per CPU (SO_REUSEPORT), and identical
+  in-flight upstream queries merged into one. Measured on 4 shared cores
+  with 200 clients: cached answers 87.7k to 110k queries/s, blocked 92k to
+  120k, forwarded 4.2k to 23.5k (median 59 ms to 7 ms).
+
 ## v1.3.1 (2026-11-09)
 
 ### Changed

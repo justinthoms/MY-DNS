@@ -13,6 +13,8 @@
 #   --tls-cert FILE       Console certificate chain (PEM); default: self-signed
 #   --tls-key FILE        Private key for --tls-cert
 #   --no-firewall         Do not manage nftables
+#   --with-unbound        Install Unbound on 127.0.0.1:5335 as the recursive resolver
+#                         (full recursion from the root servers, DNSSEC validation)
 #   --keep-resolved-stub  Do not disable systemd-resolved's stub listener on port 53
 #   --dir DIR             Install directory (default /opt/isp-netcontrol)
 #   --http-port N / --https-port N   Console ports (default 80 / 443)
@@ -23,7 +25,7 @@
 set -euo pipefail
 
 ADMIN_EMAIL="" DOMAIN="" LM_URL="" LM_CA="" DNS_LISTEN=":53" TLS_CERT="" TLS_KEY=""
-FIREWALL=true KEEP_STUB=0 FORCE=0 DIR=/opt/isp-netcontrol HTTP_PORT=80 HTTPS_PORT=443
+FIREWALL=true WITH_UNBOUND=0 KEEP_STUB=0 FORCE=0 DIR=/opt/isp-netcontrol HTTP_PORT=80 HTTPS_PORT=443
 STATE_DIR=/var/lib/isp-netcontrol
 
 die() { echo "error: $*" >&2; exit 1; }
@@ -39,12 +41,13 @@ while [ $# -gt 0 ]; do
     --tls-cert) TLS_CERT="${2:?}"; shift 2 ;;
     --tls-key) TLS_KEY="${2:?}"; shift 2 ;;
     --no-firewall) FIREWALL=false; shift ;;
+    --with-unbound) WITH_UNBOUND=1; shift ;;
     --keep-resolved-stub) KEEP_STUB=1; shift ;;
     --dir) DIR="${2:?}"; shift 2 ;;
     --http-port) HTTP_PORT="${2:?}"; shift 2 ;;
     --https-port) HTTPS_PORT="${2:?}"; shift 2 ;;
     --force) FORCE=1; shift ;;
-    -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
     *) die "unknown option $1 (see --help)" ;;
   esac
 done
@@ -124,6 +127,81 @@ $OTHER
   fi
 fi
 
+# ---- Unbound (optional recursive resolver) --------------------------------
+UNBOUND_CONF=/etc/unbound/unbound.conf.d/isp-netcontrol.conf
+if [ "$WITH_UNBOUND" -eq 1 ]; then
+  say "Setting up Unbound on 127.0.0.1:5335"
+  CPUS="$(nproc)"; THREADS=$(( CPUS > 8 ? 8 : CPUS ))
+  SLABS=1; while [ "$SLABS" -lt "$THREADS" ]; do SLABS=$(( SLABS * 2 )); done
+  MEM_MB="$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)"
+  MSG_MB=$(( MEM_MB / 16 )); [ "$MSG_MB" -lt 64 ] && MSG_MB=64; [ "$MSG_MB" -gt 1024 ] && MSG_MB=1024
+  RRSET_MB=$(( MSG_MB * 2 ))
+  # Written before the package is installed, so Unbound never starts on port 53.
+  install -d /etc/unbound/unbound.conf.d
+  cat >"$UNBOUND_CONF" <<UBCONF
+# Written by the ISP NetControl installer: recursive resolver for ISP NetControl.
+# Sized for $CPUS CPU(s) and $MEM_MB MB RAM. Re-run the installer to regenerate.
+server:
+    interface: 127.0.0.1
+    port: 5335
+    access-control: 127.0.0.0/8 allow
+    num-threads: $THREADS
+    msg-cache-slabs: $SLABS
+    rrset-cache-slabs: $SLABS
+    infra-cache-slabs: $SLABS
+    key-cache-slabs: $SLABS
+    msg-cache-size: ${MSG_MB}m
+    rrset-cache-size: ${RRSET_MB}m
+    so-reuseport: yes
+    outgoing-range: 8192
+    num-queries-per-thread: 4096
+    prefetch: yes
+    prefetch-key: yes
+    serve-expired: yes
+    serve-expired-ttl: 86400
+    qname-minimisation: yes
+    aggressive-nsec: yes
+    harden-glue: yes
+    harden-dnssec-stripped: yes
+    harden-below-nxdomain: yes
+    edns-buffer-size: 1232
+    hide-identity: yes
+    hide-version: yes
+    verbosity: 0
+UBCONF
+  if ! command -v unbound >/dev/null; then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -q
+    apt-get install -y -q unbound
+  fi
+  # Ubuntu's helper that points /etc/resolv.conf at Unbound is not wanted.
+  systemctl disable --now unbound-resolvconf.service >/dev/null 2>&1 || true
+  # DNSSEC trust anchor: Ubuntu creates it on the first systemd start; seed it now
+  # so the configuration check (and starts without systemd) work.
+  if [ ! -s /var/lib/unbound/root.key ]; then
+    install -d -o unbound -g unbound /var/lib/unbound
+    if [ -s /usr/share/dns/root.key ]; then
+      install -o unbound -g unbound -m 0644 /usr/share/dns/root.key /var/lib/unbound/root.key
+    else
+      unbound-anchor -a /var/lib/unbound/root.key || true
+      chown unbound:unbound /var/lib/unbound/root.key 2>/dev/null || true
+    fi
+  fi
+  unbound-checkconf >/dev/null || die "Unbound configuration check failed: run unbound-checkconf"
+  if [ -d /run/systemd/system ]; then
+    systemctl enable unbound >/dev/null 2>&1 || true
+    systemctl restart unbound
+  else
+    pkill -x unbound 2>/dev/null || true
+    sleep 1
+    unbound -c /etc/unbound/unbound.conf
+    echo "warning: no systemd: Unbound will not start automatically at boot"
+  fi
+  for _ in $(seq 1 20); do ss -lunH 'sport = :5335' 2>/dev/null | grep -q 127.0.0.1 && break; sleep 1; done
+  ss -lunH 'sport = :5335' 2>/dev/null | grep -q 127.0.0.1 || die "Unbound did not start on 127.0.0.1:5335 (see: journalctl -u unbound)"
+  say "Unbound is running ($THREADS threads, ${MSG_MB}m + ${RRSET_MB}m cache, DNSSEC validation)"
+fi
+
 # ---- Files ----------------------------------------------------------------
 say "Installing to $DIR"
 install -d -m 0750 "$DIR" "$DIR/src" "$DIR/backups"
@@ -153,9 +231,10 @@ EOF
   umask 022
 fi
 # Options that may change on every run.
-sed -i '/^NC_DNS_LISTEN=/d; /^NC_FIREWALL_ENABLED=/d; /^NC_LM_URL=/d; /^NC_LM_CA_FILE=/d; /^HTTP_PORT=/d; /^HTTPS_PORT=/d; /^TLS_DIR=/d; /^NC_STATE_HOST_DIR=/d' "$DIR/.env"
+sed -i '/^NC_DNS_LISTEN=/d; /^NC_DEFAULT_UPSTREAMS=/d; /^NC_FIREWALL_ENABLED=/d; /^NC_LM_URL=/d; /^NC_LM_CA_FILE=/d; /^HTTP_PORT=/d; /^HTTPS_PORT=/d; /^TLS_DIR=/d; /^NC_STATE_HOST_DIR=/d' "$DIR/.env"
 {
   echo "NC_DNS_LISTEN=$DNS_LISTEN"
+  if [ -f "$UNBOUND_CONF" ]; then echo "NC_DEFAULT_UPSTREAMS=127.0.0.1:5335"; fi
   echo "NC_FIREWALL_ENABLED=$FIREWALL"
   echo "NC_LM_URL=$LM_URL"
   [ -n "$LM_CA" ] && echo "NC_LM_CA_FILE=/etc/isp-netcontrol/lm-ca.pem" || echo "NC_LM_CA_FILE="
@@ -249,5 +328,9 @@ if [ -n "$ADMIN_PW" ]; then
   echo "  (You must set up two-factor authentication and change the password at first sign-in.)"
 fi
 echo
+if [ "$WITH_UNBOUND" -eq 1 ]; then
+  echo "Unbound: new installations use it automatically. If upstream resolvers were already saved"
+  echo "  in the console, set DNS settings > Upstream resolvers to 127.0.0.1:5335 to switch to it."
+fi
 echo "Next: sign in, open License, and activate your license key."
 echo "Before pointing subscribers at this server, review DNS settings > Allowed client networks."

@@ -36,9 +36,14 @@ type DNSSettings struct {
 	FilteringEnabled bool     `json:"filtering_enabled"`
 }
 
+// defaultUpstreams is used until the upstreams are saved in the console.
+// NC_DEFAULT_UPSTREAMS overrides it (the installer sets 127.0.0.1:5335 when
+// it installs Unbound).
+var defaultUpstreams = []string{"1.1.1.1:53", "8.8.8.8:53"}
+
 func defaultDNSSettings() DNSSettings {
 	return DNSSettings{
-		Upstreams:  []string{"1.1.1.1:53", "8.8.8.8:53"},
+		Upstreams:  append([]string(nil), defaultUpstreams...),
 		BlockMode:  "nxdomain",
 		SinkholeV4: "0.0.0.0", SinkholeV6: "::",
 		// Private, CGNAT and loopback ranges: subscribers behind the ISP. Public

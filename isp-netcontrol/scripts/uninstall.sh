@@ -26,6 +26,13 @@ if [ -f /etc/systemd/resolved.conf.d/isp-netcontrol.conf ]; then
   echo "Restored systemd-resolved's stub listener."
 fi
 rm -f /etc/cron.d/isp-netcontrol-backup
+if [ -f /etc/unbound/unbound.conf.d/isp-netcontrol.conf ]; then
+  # Unbound was installed with --with-unbound: stop it and remove our configuration
+  # (the package stays; remove it with: apt purge unbound).
+  rm -f /etc/unbound/unbound.conf.d/isp-netcontrol.conf
+  systemctl disable --now unbound >/dev/null 2>&1 || pkill -x unbound 2>/dev/null || true
+  echo "Unbound stopped and its ISP NetControl configuration removed."
+fi
 if [ "$PURGE" -eq 1 ]; then
   rm -rf -- "$STATE_DIR"
   case "$DIR" in /opt/*) rm -rf -- "$DIR" ;; *) echo "not deleting $DIR automatically (outside /opt); remove it yourself" ;; esac

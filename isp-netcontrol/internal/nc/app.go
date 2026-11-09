@@ -90,6 +90,13 @@ func ConfigFromEnv() (Config, error) {
 	if _, err := fmt.Sscan(env("NC_CACHE_SIZE", "100000"), &c.CacheSize); err != nil || c.CacheSize < 1000 {
 		return c, errors.New("NC_CACHE_SIZE must be a number of answers, at least 1000")
 	}
+	if v := env("NC_DEFAULT_UPSTREAMS", ""); v != "" {
+		ds := DNSSettings{Upstreams: strings.Split(v, ","), BlockMode: "nxdomain", SinkholeV4: "0.0.0.0", SinkholeV6: "::", AllowedClients: []string{"127.0.0.0/8"}}
+		if err := ds.Validate(); err != nil {
+			return c, fmt.Errorf("NC_DEFAULT_UPSTREAMS: %w", err)
+		}
+		defaultUpstreams = ds.Upstreams
+	}
 	if c.DatabaseURL == "" {
 		return c, errors.New("NC_DATABASE_URL is required")
 	}
