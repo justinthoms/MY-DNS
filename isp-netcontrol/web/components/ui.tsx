@@ -18,6 +18,30 @@ const NAV = [
   { href: "/audit", label: "Audit log" },
 ];
 
+type Theme = "dark" | "light" | "system";
+
+function ThemeSwitch() {
+  const [theme, setTheme] = useState<Theme>("dark");
+  useEffect(() => {
+    try { setTheme((localStorage.getItem("nc-theme") as Theme) || "dark"); } catch { /* storage unavailable */ }
+  }, []);
+  const choose = (t: Theme) => {
+    setTheme(t);
+    try { localStorage.setItem("nc-theme", t); } catch { /* storage unavailable */ }
+    if (t === "system") delete document.documentElement.dataset.theme;
+    else document.documentElement.dataset.theme = t;
+  };
+  return (
+    <div className="theme-switch" role="group" aria-label="Theme">
+      {(["dark", "light", "system"] as Theme[]).map((t) => (
+        <button key={t} type="button" className={theme === t ? "on" : ""} aria-pressed={theme === t} onClick={() => choose(t)}>
+          {t[0].toUpperCase() + t.slice(1)}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 // Shell checks the session and renders the navigation around a page.
 export function Shell({ children }: { children: ReactNode }) {
   const path = usePathname();
@@ -45,6 +69,7 @@ export function Shell({ children }: { children: ReactNode }) {
           </Link>
         ))}
         <div className="spacer" />
+        <ThemeSwitch />
         <div className="who">{me.user.email}</div>
         <a href="#" onClick={(e) => { e.preventDefault(); logout(); }}>Sign out</a>
       </nav>

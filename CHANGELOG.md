@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.3.0 (2026-11-09)
+
+### New
+- **NOC dashboard**: six headline figures with change vs the previous
+  period (total queries, queries per second with peak, success rate,
+  blocked share, upstream response time, cache hit rate); query rate by
+  result; result distribution bar; top domains; response-time chart; query
+  types; blocked queries by category; system health; top blocked domains,
+  top clients and upstream resolvers. 15-minute range and auto refresh.
+- **Dark navy theme** (default) with a Dark / Light / System switch.
+- New data: upstream response time per query, per-upstream health,
+  NXDOMAIN answers, block-list category of each blocked query.
+- API: `/api/dns/breakdown` (query types, block categories) and
+  `/api/system/health`.
+
 ## v1.2.0 (2026-11-09)
 
 ### New

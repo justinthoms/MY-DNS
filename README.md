@@ -9,8 +9,9 @@ Internet service providers:
   configured client networks are answered, so it is never an open resolver.
 - Local DNS records (A, AAAA, CNAME, TXT, MX, PTR, wildcards) for internal
   hosts, overrides and reverse lookups.
-- A dashboard with a queries-over-time graph (total, blocked, refused,
-  failed) for 1 hour to 30 days, and the top blocked domains and clients.
+- A NOC dashboard: query rate, result distribution, response time, query
+  types, blocked categories, top domains and clients, upstream and system
+  health, with a dark theme.
 - Choose which interfaces and IP addresses DNS listens on, applied live.
 - Anycast support: health checks withdraw this server's anycast routes
   (iBGP, OSPF, IS-IS via FRR) when DNS fails, and announce them on recovery.
@@ -34,11 +35,18 @@ The console of a running installation, with demo data (example domains,
 documentation IP ranges, and a synthetic traffic history for the graph).
 
 ### Dashboard
-Queries over time for the chosen period (1 hour to 30 days) with a hover
-readout for every series and a table view, summary figures, the top blocked
-domains and top clients, and the state of licensing, DNS and the firewall.
+A NOC-style overview for 15 minutes to 30 days, refreshed every 30 seconds:
+total queries, queries per second, success rate, blocked share, upstream
+response time and cache hit rate (each compared with the previous period);
+query rate by result; result distribution; top domains; response time;
+query types; blocked queries by category; system health (DNS listeners,
+upstream resolvers, database, firewall, anycast, license, server load);
+top blocked domains, top clients and upstream resolver status. Dark theme
+by default, with a Light / System switch.
 
-![Dashboard](docs/screenshots/03-dashboard.png)
+![Dashboard, dark theme](docs/screenshots/03-dashboard.png)
+
+![Dashboard, light theme](docs/screenshots/03-dashboard-light.png)
 
 ### DNS filtering
 "Check a domain" shows how a name is answered and which entry decides it.

@@ -25,7 +25,7 @@ services:
     build:
       context: ../..
       dockerfile: isp-netcontrol/deploy/Dockerfile.api
-    image: mydns/isp-netcontrol-api:1.2.0
+    image: mydns/isp-netcontrol-api:1.3.0
     restart: unless-stopped
     depends_on:
       postgres: { condition: service_healthy }
@@ -62,7 +62,7 @@ services:
     build:
       context: ../..
       dockerfile: isp-netcontrol/deploy/Dockerfile.web
-    image: mydns/isp-netcontrol-web:1.2.0
+    image: mydns/isp-netcontrol-web:1.3.0
     restart: unless-stopped
     ports:
       - "127.0.0.1:3001:3001"
