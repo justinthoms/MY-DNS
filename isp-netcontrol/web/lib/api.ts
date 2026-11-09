@@ -57,5 +57,39 @@ export const post = <T = any>(p: string, b: unknown = {}) => api<T>("POST", p, b
 export const put = <T = any>(p: string, b: unknown = {}) => api<T>("PUT", p, b);
 export const del = <T = any>(p: string) => api<T>("DELETE", p);
 
-export const fmtDate = (s?: string | null) => (s ? new Date(s).toISOString().slice(0, 10) : "—");
-export const fmtTime = (s?: string | null) => (s ? new Date(s).toISOString().replace("T", " ").slice(0, 19) + " UTC" : "—");
+// Times are shown in the viewer's own time zone (IST in India), labelled
+// with the zone name. The API always sends UTC.
+const partsFmt = new Intl.DateTimeFormat("en-IN", {
+  year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit",
+  hourCycle: "h23", timeZoneName: "short",
+});
+function localParts(d: Date) {
+  const p: Record<string, string> = {};
+  for (const x of partsFmt.formatToParts(d)) p[x.type] = x.value;
+  return p;
+}
+/** Name of the viewer's time zone, e.g. "IST". */
+export const tzName = () => localParts(new Date()).timeZoneName ?? "local time";
+/** 2026-11-09 */
+export const fmtDate = (s?: string | null) => {
+  if (!s) return "—";
+  const p = localParts(new Date(s));
+  return `${p.year}-${p.month}-${p.day}`;
+};
+/** 2026-11-09 13:58:10 IST */
+export const fmtTime = (s?: string | null) => {
+  if (!s) return "—";
+  const p = localParts(new Date(s));
+  return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second} ${p.timeZoneName ?? ""}`.trim();
+};
+/** 13:58 / 11-09 13:58 / 11-09, for chart axes. */
+export const fmtAxis = (d: Date, withDate: boolean, dateOnly = false) => {
+  const p = localParts(d);
+  if (dateOnly) return `${p.month}-${p.day}`;
+  return withDate ? `${p.month}-${p.day} ${p.hour}:${p.minute}` : `${p.hour}:${p.minute}`;
+};
+/** 2026-11-09 13:58 IST, for chart tooltips and tables. */
+export const fmtMinute = (s: string) => {
+  const p = localParts(new Date(s));
+  return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute} ${p.timeZoneName ?? ""}`.trim();
+};

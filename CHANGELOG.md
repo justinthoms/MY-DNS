@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.3.1 (2026-11-09)
+
+### Changed
+- The console shows every time in the viewer's own time zone (IST in
+  India), labelled with the zone name, instead of UTC. CSV exports keep
+  UTC (column `time_utc`).
+
 ## v1.3.0 (2026-11-09)
 
 ### New

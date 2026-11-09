@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { ReactNode, useCallback, useEffect, useState } from "react";
-import { ApiError, get } from "@/lib/api";
+import { ApiError, get, tzName } from "@/lib/api";
 import { LicenseState, MODE_LABEL } from "@/lib/license";
 import { Alert, Shell } from "@/components/ui";
 import LineChart, { Series } from "@/components/LineChart";
@@ -234,7 +234,7 @@ export default function Dashboard() {
 
       <div className="dgrid r2">
         <div className="panel">
-          <div className="panel-head"><h2>Query rate (QPS)</h2><span className="muted">{rangeLabel} · UTC</span></div>
+          <div className="panel-head"><h2>Query rate (QPS)</h2><span className="muted">{rangeLabel} · {tzName()}</span></div>
           {ts ? <LineChart points={ts.points} series={qpsSeries} bucketSeconds={ts.bucket_seconds} fmt={qpsFmt} label="Queries per second by result" loading={loading} /> : <p className="muted">Loading…</p>}
         </div>
         <div className="panel">

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { fmtAxis, fmtMinute, tzName } from "@/lib/api";
 
 export type Series<P> = { key: string; label: string; color: string; value: (p: P) => number | null };
 
@@ -14,10 +15,8 @@ function niceMax(v: number) {
 }
 
 function fmtTick(d: Date, bucketSeconds: number) {
-  const iso = d.toISOString();
-  if (bucketSeconds >= 12 * 3600) return iso.slice(5, 10);
-  if (bucketSeconds >= 2 * 3600) return `${iso.slice(5, 10)} ${iso.slice(11, 13)}h`;
-  return iso.slice(11, 16);
+  if (bucketSeconds >= 12 * 3600) return fmtAxis(d, false, true);
+  return fmtAxis(d, bucketSeconds >= 2 * 3600);
 }
 
 // LineChart: one y-axis, 2px lines, crosshair tooltip with every series,
@@ -82,11 +81,11 @@ export default function LineChart<P extends { t: string }>({
       {table ? (
         <div className="table-wrap" style={{ maxHeight: height + 20, overflowY: "auto" }}>
           <table>
-            <thead><tr><th>Time (UTC)</th>{series.map((s) => <th key={s.key} style={{ textAlign: "right" }}>{s.label}</th>)}</tr></thead>
+            <thead><tr><th>Time ({tzName()})</th>{series.map((s) => <th key={s.key} style={{ textAlign: "right" }}>{s.label}</th>)}</tr></thead>
             <tbody>
               {[...points].reverse().map((p) => (
                 <tr key={p.t}>
-                  <td>{new Date(p.t).toISOString().slice(0, 16).replace("T", " ")}</td>
+                  <td>{fmtMinute(p.t)}</td>
                   {series.map((s) => { const v = s.value(p); return <td key={s.key} className="num" style={{ textAlign: "right" }}>{v == null ? "—" : fmt(v)}</td>; })}
                 </tr>
               ))}
@@ -127,7 +126,7 @@ export default function LineChart<P extends { t: string }>({
           </svg>
           {hp && hover != null && (
             <div className="viz-tip" style={{ left: Math.min(x(hover) + 12, width - 180), top: PAD.top }} role="status">
-              <div className="viz-tip-time">{new Date(hp.t).toISOString().slice(0, 16).replace("T", " ")} UTC{hover === n - 1 && " (in progress)"}</div>
+              <div className="viz-tip-time">{fmtMinute(hp.t)}{hover === n - 1 && " (in progress)"}</div>
               {series.map((s) => { const v = s.value(hp); return (
                 <div key={s.key} className="viz-tip-row"><i style={{ background: s.color }} /><strong>{v == null ? "—" : fmt(v)}</strong><span>{s.label}</span></div>
               ); })}
