@@ -24,7 +24,7 @@ import (
 )
 
 // Version is the product version reported to the License Manager.
-const Version = "1.4.4"
+const Version = "1.4.5"
 
 // Config is read from the environment (see deploy/.env.example).
 type Config struct {

@@ -120,8 +120,8 @@ func New(p *Policy, opts ...Option) *Server {
 	s := &Server{
 		cache:   newCache(DefaultCacheSize),
 		events:  make(chan QueryEvent, 65536),
-		client:  &dns.Client{Net: "udp", Timeout: 2 * time.Second, UDPSize: dns.DefaultMsgSize},
-		tcp:     &dns.Client{Net: "tcp", Timeout: 3 * time.Second},
+		client:  &dns.Client{Net: "udp", Timeout: forwardBudget, UDPSize: dns.DefaultMsgSize},
+		tcp:     &dns.Client{Net: "tcp", Timeout: forwardBudget},
 		limiter: newLimiter(),
 		torture: newTortureGuard(),
 	}
@@ -403,6 +403,14 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 		}
 	}
 	if resp := s.cache.get(req); resp != nil {
+		if resp.Rcode == dns.RcodeServerFailure { // remembered failure (RFC 9520)
+			s.stats.failed.Add(1)
+			ev.Action = "failed"
+			s.emit(p, ev)
+			resp.Id = req.Id
+			_ = w.WriteMsg(resp)
+			return
+		}
 		s.stats.cached.Add(1)
 		if resp.Rcode == dns.RcodeNameError {
 			s.stats.nxdomain.Add(1)
@@ -441,6 +449,9 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 		}
 	}
 	if err != nil {
+		if !shared {
+			s.cache.putFailure(req)
+		}
 		s.stats.failed.Add(1)
 		ev.Action = "failed"
 		s.emit(p, ev)
@@ -490,42 +501,110 @@ func (s *Server) blockedAnswer(p *Policy, req *dns.Msg) *dns.Msg {
 	return m
 }
 
+// Forwarding timing. A client usually gives up after about 5 seconds, so the
+// whole lookup must end well before that: a late answer is no answer.
+const (
+	// forwardBudget is the most time spent on one lookup across all
+	// upstreams; then the client gets SERVFAIL instead of silence.
+	forwardBudget = 3500 * time.Millisecond
+	// hedgeDelay is how long an upstream may take before the next one is
+	// asked as well (the first useful answer wins). A recursive resolver can
+	// be slow on an uncached name while a public resolver has it cached.
+	hedgeDelay = 700 * time.Millisecond
+)
+
+// forward asks the upstreams in order: the next one is asked when the
+// previous answered SERVFAIL, failed, or has not answered within hedgeDelay.
+// Earlier queries are not cancelled; the first NOERROR/NXDOMAIN answer wins.
 func (s *Server) forward(p *Policy, req *dns.Msg) (*dns.Msg, error) {
+	ups := p.Upstreams
+	if len(ups) == 0 {
+		return nil, errors.New("no upstream resolvers configured")
+	}
 	out := req.Copy()
 	out.Id = dns.Id()
 	if out.IsEdns0() == nil {
 		out.SetEdns0(dns.DefaultMsgSize, false)
 	}
-	var lastErr error = errors.New("no upstream resolvers configured")
-	for _, up := range p.Upstreams {
-		t0 := time.Now()
-		var resp *dns.Msg
-		var err error
-		if strings.HasPrefix(up, "tls://") {
-			resp, err = s.dot.exchange(out, up)
-		} else if resp, _, err = s.client.Exchange(out, up); err == nil && resp.Truncated {
-			resp, _, err = s.tcp.Exchange(out, up)
-		}
-		o := answered
-		switch {
-		case err != nil:
-			o = failed
-		case resp.Rcode == dns.RcodeRefused:
-			// The upstream does not serve us (access list): a real failure.
-			o, err = failed, errors.New("upstream "+up+" answered REFUSED")
-		case resp.Rcode == dns.RcodeServerFailure:
-			// Usually a broken or DNSSEC-bogus name; try the next upstream,
-			// but the upstream itself is working.
-			o, err = servfail, errors.New("upstream "+up+" answered SERVFAIL")
-		}
-		s.ups.record(up, time.Since(t0), o, err)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		return resp, nil
+	// The context ends with the budget. It is not cancelled when an answer
+	// arrives: the other queries finish on their own, so their outcome is
+	// recorded truthfully in the upstream statistics.
+	ctx, cancel := context.WithTimeout(context.Background(), forwardBudget)
+	time.AfterFunc(forwardBudget, cancel)
+	type result struct {
+		resp *dns.Msg
+		o    outcome
+		err  error
 	}
-	return nil, lastErr
+	results := make(chan result, len(ups)) // buffered: late answers never block
+	started := 0
+	start := func() {
+		up, m := ups[started], out.Copy()
+		started++
+		go func() {
+			resp, o, err := s.exchange(ctx, m, up)
+			results <- result{resp, o, err}
+		}()
+	}
+	start()
+	hedge := time.NewTimer(hedgeDelay)
+	defer hedge.Stop()
+	pending := 1
+	var lastErr error
+	for {
+		select {
+		case r := <-results:
+			pending--
+			if r.o == answered {
+				return r.resp, nil
+			}
+			lastErr = r.err
+			if started < len(ups) {
+				start()
+				pending++
+				hedge.Reset(hedgeDelay)
+			} else if pending == 0 {
+				return nil, lastErr
+			}
+		case <-hedge.C:
+			if started < len(ups) {
+				start()
+				pending++
+				hedge.Reset(hedgeDelay)
+			}
+		case <-ctx.Done():
+			if lastErr == nil {
+				lastErr = errors.New("no upstream answered within " + forwardBudget.String())
+			}
+			return nil, lastErr
+		}
+	}
+}
+
+// exchange sends one query to one upstream and records the outcome for the
+// upstream health statistics.
+func (s *Server) exchange(ctx context.Context, m *dns.Msg, up string) (*dns.Msg, outcome, error) {
+	t0 := time.Now()
+	var resp *dns.Msg
+	var err error
+	if strings.HasPrefix(up, "tls://") {
+		resp, err = s.dot.exchange(m, up)
+	} else if resp, _, err = s.client.ExchangeContext(ctx, m, up); err == nil && resp.Truncated {
+		resp, _, err = s.tcp.ExchangeContext(ctx, m, up)
+	}
+	o := answered
+	switch {
+	case err != nil:
+		o = failed
+	case resp.Rcode == dns.RcodeRefused:
+		// The upstream does not serve us (access list): a real failure.
+		o, err = failed, errors.New("upstream "+up+" answered REFUSED")
+	case resp.Rcode == dns.RcodeServerFailure:
+		// Usually a broken or DNSSEC-bogus name; the upstream itself works.
+		o, err = servfail, errors.New("upstream "+up+" answered SERVFAIL")
+	}
+	s.ups.record(up, time.Since(t0), o, err)
+	return resp, o, err
 }
 
 // Probe checks that the resolver can answer: it must be listening and an

@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.4.5 (2026-11-10)
+
+### Faster, fewer lost queries
+- **Hedged upstream lookups with a time budget.** If an upstream has not
+  answered after 700 ms (for example Unbound resolving an uncached name),
+  the next upstream is asked as well and the first useful answer wins. A
+  SERVFAIL moves on at once. Every lookup ends within 3.5 s: the client gets
+  SERVFAIL instead of no answer. Before, each upstream had 2 s in turn, so a
+  slow name could take 6 s and was lost by clients that wait 5 s (seen with
+  dnsperf on ns5: 1.28% lost, maximum latency 4.96 s).
+- **Failures are cached for 5 seconds** (RFC 9520), so retries for a broken
+  name do not reach every upstream again.
+
 ## v1.4.4 (2026-11-10)
 
 ### Fixed

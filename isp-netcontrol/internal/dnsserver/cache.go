@@ -140,6 +140,27 @@ func (c *cache) put(req, resp *dns.Msg) {
 	s.entries[key] = e
 }
 
+// failureTTL is how long a failed lookup is remembered (RFC 9520: resolvers
+// must cache resolution failures, for at least 1 and at most 300 seconds).
+// It keeps retry bursts for a broken name from reaching every upstream.
+const failureTTL = 5 * time.Second
+
+// putFailure remembers that req could not be resolved.
+func (c *cache) putFailure(req *dns.Msg) {
+	m := new(dns.Msg)
+	m.SetRcode(req, dns.RcodeServerFailure)
+	m.RecursionAvailable = true
+	key := cacheKey(req)
+	now := time.Now()
+	s := c.shard(key)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.entries[key]; !exists && len(s.entries) >= s.max {
+		return // never evict a real answer for a failure
+	}
+	s.entries[key] = cacheEntry{msg: m, stored: now, expires: now.Add(failureTTL)}
+}
+
 func (c *cache) get(req *dns.Msg) *dns.Msg {
 	key := cacheKey(req)
 	s := c.shard(key)

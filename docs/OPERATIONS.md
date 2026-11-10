@@ -162,6 +162,20 @@ checked against the name; connections are kept open and reused, so only the
 first query pays for the TLS handshake. With Unbound (`127.0.0.1:5335`)
 queries go to the authoritative servers directly and this is not needed.
 
+## Load testing
+
+With `dnsperf` or `dnsbench`, put the test machine in **Protection → Never
+limit**, or the per-client rate limit (500 queries/s by default) drops
+queries. Raise dnsperf's in-flight limit to measure capacity rather than
+latency, for example `-q 2000 -t 5`; with the default (`-q 100`) the result
+is about 100 / average latency. A query file with many unique or obsolete
+names measures uncached recursion (tens of milliseconds per name); repeat a
+smaller set of names to measure cached answers.
+
+Upstreams are asked in order; the next one is also asked when the previous
+answered SERVFAIL, failed, or took more than 700 ms. Every lookup ends
+within 3.5 s (SERVFAIL if nothing answered), so clients never time out.
+
 ## Attack protection
 
 **Protection** in the console shows what the defences are doing and lets
