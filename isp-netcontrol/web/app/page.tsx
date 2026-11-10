@@ -12,7 +12,7 @@ type TS = { range: string; bucket_seconds: number; points: Point[]; totals: Poin
 type Item = { key: string; count: number; blocked?: number };
 type Top = { blocked_domains: Item[]; domains: Item[]; clients: Item[] };
 type Breakdown = { query_types: Item[]; block_categories: Item[] };
-type Upstream = { addr: string; queries: number; failures: number; avg_ms: number; healthy: boolean | null; last_error?: string };
+type Upstream = { addr: string; queries: number; failures: number; servfail?: number; avg_ms: number; healthy: boolean | null; last_error?: string };
 type Health = {
   version: string; uptime_s: number; dns: { listening: string[]; ok: boolean }; upstreams: Upstream[];
   database: { ok: boolean; ping_ms: number; size_bytes: number; error?: string };
@@ -295,16 +295,16 @@ export default function Dashboard() {
                 <thead><tr><th>Resolver</th><th>Status</th><th style={{ textAlign: "right" }}>Avg</th><th style={{ textAlign: "right" }}>Failures</th></tr></thead>
                 <tbody>
                   {health.upstreams.map((u) => (
-                    <tr key={u.addr} title={u.last_error ?? ""}>
+                    <tr key={u.addr} title={u.healthy === false && u.last_error ? `Last error: ${u.last_error}` : ""}>
                       <td className="mono nowrap">{u.addr}</td>
                       <td className="nowrap" title={u.healthy == null ? "No queries yet" : u.healthy ? "Answering" : "Failing"}>{u.healthy == null ? <Status level="off" text="Idle" /> : u.healthy ? <Status level="good" text="OK" /> : <Status level="critical" text="Down" />}</td>
                       <td className="num nowrap" style={{ textAlign: "right" }}>{u.avg_ms ? msFmt(u.avg_ms) : "—"}</td>
-                      <td className="num nowrap" style={{ textAlign: "right" }} title={`${num(u.failures)} failed of ${num(u.queries)} queries`}>{num(u.failures)}</td>
+                      <td className="num nowrap" style={{ textAlign: "right" }} title={`${num(u.queries)} queries: ${num(u.failures)} failed (timeout, network error or REFUSED), ${num(u.servfail ?? 0)} answered SERVFAIL (usually a broken domain, not a problem with this resolver)`}>{num(u.failures)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-              <p className="muted" style={{ fontSize: 12, marginBottom: 0 }}>Counted since the service started ({Math.floor(health.uptime_s / 3600)} h ago).</p>
+              <p className="muted" style={{ fontSize: 12, marginBottom: 0 }}>Counted since the service started ({Math.floor(health.uptime_s / 3600)} h ago). Failures are timeouts and errors only. Resolvers lower in the list are asked only when the ones above cannot answer, so they mostly see names that do not resolve anywhere.</p>
             </div>
           ) : <p className="muted">Loading…</p>}
         </div>

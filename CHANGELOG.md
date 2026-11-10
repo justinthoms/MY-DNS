@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.4.4 (2026-11-10)
+
+### Fixed
+- Upstream resolvers were shown as "Down" when they correctly answered
+  SERVFAIL for broken names. With Unbound first and public resolvers as
+  fallback, the fallbacks only see names Unbound could not resolve, so they
+  looked broken. Now only timeouts, network errors and REFUSED count as
+  failures, SERVFAIL answers are counted separately (`servfail`), and an
+  upstream is down only after 3 failures in a row.
+
 ## v1.4.3 (2026-11-09)
 
 ### Fixed

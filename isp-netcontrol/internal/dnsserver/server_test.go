@@ -177,9 +177,10 @@ func TestNewCountersAndUpstreamHealth(t *testing.T) {
 	ask("gone.example")
 	ask("gone.example") // from cache, still NXDOMAIN
 	ask("ok.example")
+	ask("ok2.example") // third failure in a row for the dead upstream
 	ask("www.bad.example")
 	st := s.Stats()
-	if st.Nxdomain != 2 || st.LatencyCount != 2 || st.LatencyUsSum == 0 || st.Blocked != 1 {
+	if st.Nxdomain != 2 || st.LatencyCount != 3 || st.LatencyUsSum == 0 || st.Blocked != 1 {
 		t.Fatalf("stats %+v", st)
 	}
 	ups := s.UpstreamStats()
@@ -187,7 +188,7 @@ func TestNewCountersAndUpstreamHealth(t *testing.T) {
 		t.Fatalf("upstreams %+v %+v", ups[0], ups[1])
 	}
 	var blockedEv QueryEvent
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 5; i++ {
 		ev := <-s.Events()
 		if ev.Action == "blocked" {
 			blockedEv = ev
@@ -256,5 +257,38 @@ func TestCacheEvictionIsBounded(t *testing.T) {
 	}
 	if n := c.size(); n > 640 || n < 500 {
 		t.Fatalf("cache size %d, want close to but not above 640", n)
+	}
+}
+
+// An upstream that answers SERVFAIL (a broken name) is working: it must not
+// be shown as down, and SERVFAIL is counted apart from real failures.
+// Regression: with Unbound first, 1.1.1.1 and 8.8.8.8 only saw names that
+// Unbound could not resolve and were shown as "Down".
+func TestServfailIsNotAnUpstreamFailure(t *testing.T) {
+	servfailUp := func() string {
+		pc, _ := net.ListenPacket("udp", "127.0.0.1:0")
+		srv := &dns.Server{PacketConn: pc, Handler: dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {
+			m := new(dns.Msg)
+			m.SetRcode(r, dns.RcodeServerFailure)
+			_ = w.WriteMsg(m)
+		})}
+		go func() { _ = srv.ActivateAndServe() }()
+		t.Cleanup(func() { _ = srv.Shutdown() })
+		return pc.LocalAddr().String()
+	}
+	first, second := servfailUp(), servfailUp()
+	s := New(&Policy{BlockMode: "nxdomain", Upstreams: []string{first, second},
+		AllowedClients: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}})
+	for i := 0; i < 5; i++ {
+		m := new(dns.Msg)
+		m.SetQuestion(fmt.Sprintf("broken%d.example.", i), dns.TypeA)
+		if r := s.Resolve(netip.MustParseAddr("127.0.0.1"), m); r == nil || r.Rcode != dns.RcodeServerFailure {
+			t.Fatalf("query %d: %v", i, r)
+		}
+	}
+	for _, u := range s.UpstreamStats() {
+		if u.Healthy == nil || !*u.Healthy || u.Failures != 0 || u.ServFail != 5 || u.Queries != 5 {
+			t.Fatalf("%s: %+v", u.Addr, u)
+		}
 	}
 }

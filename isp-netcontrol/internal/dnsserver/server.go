@@ -506,10 +506,19 @@ func (s *Server) forward(p *Policy, req *dns.Msg) (*dns.Msg, error) {
 		} else if resp, _, err = s.client.Exchange(out, up); err == nil && resp.Truncated {
 			resp, _, err = s.tcp.Exchange(out, up)
 		}
-		if err == nil && (resp.Rcode == dns.RcodeServerFailure || resp.Rcode == dns.RcodeRefused) {
-			err = errors.New("upstream " + up + " answered " + dns.RcodeToString[resp.Rcode])
+		o := answered
+		switch {
+		case err != nil:
+			o = failed
+		case resp.Rcode == dns.RcodeRefused:
+			// The upstream does not serve us (access list): a real failure.
+			o, err = failed, errors.New("upstream "+up+" answered REFUSED")
+		case resp.Rcode == dns.RcodeServerFailure:
+			// Usually a broken or DNSSEC-bogus name; try the next upstream,
+			// but the upstream itself is working.
+			o, err = servfail, errors.New("upstream "+up+" answered SERVFAIL")
 		}
-		s.ups.record(up, time.Since(t0), err)
+		s.ups.record(up, time.Since(t0), o, err)
 		if err != nil {
 			lastErr = err
 			continue
